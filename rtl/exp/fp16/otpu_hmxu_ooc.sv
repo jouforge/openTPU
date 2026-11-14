@@ -2,7 +2,7 @@
 // instruction controller and converters, but not the slice's TMEM arbiter.
 module otpu_hmxu_ooc
   import otpu_pkg::*;
-#(parameter int N = 8) (
+#(parameter int N = 8, parameter bit W4A16 = 0) (
   input  logic clk,
   input  logic rst,
   input  logic start,
@@ -30,7 +30,7 @@ module otpu_hmxu_ooc
     r_req <= r_req_d; r_addr <= r_addr_d;
     w_req <= w_req_d; w_addr <= w_addr_d; w_data <= w_data_d;
   end
-  otpu_hmxu #(.N(N)) u_half (
+  otpu_hmxu #(.N(N), .W4A16(W4A16)) u_half (
     .clk, .rst(rst_q), .start(start_q), .cmd(cmd_q), .rdy(rdy_d), .done(done_d),
     .r_req(r_req_d), .r_addr(r_addr_d), .r_ready(rr_q), .r_valid(rv_q), .r_data(r_data_q),
     .w_req(w_req_d), .w_addr(w_addr_d), .w_data(w_data_d), .w_ready(wr_q)

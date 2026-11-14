@@ -457,7 +457,7 @@ def run(a, t, dev: str, sim: bool) -> tuple[list[Row], list[str]]:
                                      | R.CAP2_FSUM | R.CAP2_SPLITQ | R.CAP2_ST16S
                                      | R.CAP2_QHL | R.CAP2_VSIG | R.CAP2_VMAC
                                      | R.CAP2_QSTHL | R.CAP2_OUTER1 | R.CAP2_QONCE
-                                     | R.CAP2_SPLMM | R.CAP2_FP16)
+                                     | R.CAP2_SPLMM | R.CAP2_FP16 | R.CAP2_W4A16)
                            or not v[8] & R.CAP2_GATHER
                            and (i.get("cfg") or {}).get("S", 1) > 1):
                     bad.append(f"CAPS2 {v[8]:#x}")      # reserved bits, or no GATHER at S > 1

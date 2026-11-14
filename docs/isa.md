@@ -222,6 +222,7 @@ and ST's `n`, QACT's `w2` and `w3`, GATHER's `w3`).
 | 0x22 | QST | quantize TMEM rows into DRAM bytes |
 | 0x23 | HMM | packed binary16 TMEM matrices, FP32 accumulation (`Config.FP16`) |
 | 0x24 | HCVT | FP32 / packed binary16 TMEM conversion (`Config.FP16`) |
+| 0x25 | HDQ | packed signed INT4 times binary16 scales to binary16 (`Config.W4A16`) |
 | 0x30 | VOP | vector op on a TMEM tile |
 | 0x40 | GATHER | all-gather over slices |
 
@@ -266,6 +267,27 @@ instructions. Wait footprints include both packed sources, the FP32 destination
 and its ACC read. Both the footprint scoreboard and wait-count sequencer support
 them. FP16 off leaves existing target hashes unchanged; enabling it changes the
 architecture hash and the host checks the advertised capability.
+
+### HDQ
+
+HDQ requires FP16 and `Config.W4A16` (`[arch] W4A16 = true`, CAPS2 bit27).
+It shares the MXU execution slot and uses 32-bit TMEM word addresses:
+`R[ra]+w1` is the output, `R[rb]+w2` the packed codes, `R[rc]+w3` the
+packed binary16 scales, and immediate w4 the element count (0..65535).
+Flags and w5..w7 are zero. Eight signed two's-complement codes occupy a word,
+low nibble first; two scales or outputs occupy a word, low halfword first.
+For each element, the result is `half_RNE(code * scale_half)`, using an exact
+FP32 product before half rounding. All 16 codes are defined. See the
+[mixed-precision contract](mixed_precision.md) for exceptional values.
+
+HDQ reads `ceil(count/8)` code words and `ceil(count/2)` scale words, and writes
+`ceil(count/2)` output words. An odd output's unused high halfword is zero.
+Count zero performs no access. Output must be disjoint from both source spans;
+the sources may overlap. The reference validates bounds and reserved fields;
+hardware assumes valid operands, as with HMM. Both sequencers track the two
+read spans and one write span. Builds without W4A16 reject HDQ. W4A16 requires
+FP16, changes the architecture hash when enabled, and is checked by the host.
+Leaving it disabled preserves existing target hashes.
 
 ### MM
 

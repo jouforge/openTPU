@@ -11,6 +11,44 @@ MODES = ("w16a16", "w8a8", "w4a16")
 KINDS = ("attn", "delta", "mlp", "gateup", "down", "head", "wq", "wk", "wv", "wo")
 
 
+def weight(array, mode, group=128):
+    """The placed weight type makes matrix dispatch explicit in a traced program."""
+    from ..runtime import HalfWeight, Int4Weight, Weight
+    if mode == "w16a16":
+        return HalfWeight(array)
+    if mode == "w4a16":
+        return Int4Weight(array, group=group)
+    if mode == "w8a8":
+        return Weight(array, fmt="int8")
+    raise ValueError(f"unknown matrix precision {mode!r}")
+
+
+def reference(x, w, mode, D=128, group=128):
+    """Projection oracle, independent of the compiler/runtime and never an Engine fallback."""
+    import numpy as np
+    from .. import fp16 as H, fp32 as F, int4 as Q4, quant as Q
+    if mode == "w16a16":
+        return H.matmul(H.pack(x), H.pack(w.T))
+    if mode == "w4a16":
+        return Q4.matmul(x, Q4.quantize(w, group))
+    if mode != "w8a8":
+        raise ValueError(f"unknown matrix precision {mode!r}")
+    # Match QACT and the integer window, including dropped low-exponent groups.
+    # The final FP32 scale application has the MXU's two separate roundings.
+    qa, sa, da = F.quantize_mx(F.f32(x), D // Q.NSUB)
+    da = da.reshape(len(x), -1, Q.NSUB)
+    qw, sw, dw = F.quantize_mx(F.f32(w), D)
+    sums = np.zeros((len(x), len(w)), np.int64)
+    for k in range(w.shape[1] // D):
+        for sub in range(Q.NSUB):
+            lo = k * D + sub * (D // Q.NSUB)
+            hi = lo + D // Q.NSUB
+            raw = qa[:, lo:hi].astype(np.int64) @ qw[:, lo:hi].astype(np.int64).T
+            shift = 16 - da[:, k, sub].astype(np.int64)[:, None] - dw[:, k].astype(np.int64)[None, :]
+            sums += np.where(shift >= 0, raw << np.maximum(shift, 0), 0)
+    return F.mul(F.mul(F.i2f(sums), sw[None, :]), F.mul(sa[:, None], np.float32(2**-16)))
+
+
 class Policy:
     """Resolved matrix choices for dense Qwen3.5, with a canonical cache identity.
 
@@ -27,6 +65,7 @@ class Policy:
         self.mode, self.layers = mode, layers
         rules = os.environ.get("OTPU_PRECISIONS", "") if rules is None else rules
         self.rules = FM.rules(rules, KINDS, allowed=MODES)
+        self.label = rules.replace(" ", "")
         if any(ranged and hi >= layers for _, lo, hi, ranged, fmt in self.rules):
             raise ValueError("precision rule's layer range exceeds the checkpoint")
         self.head = head or FM.plain(self.rules).get("head", mode)

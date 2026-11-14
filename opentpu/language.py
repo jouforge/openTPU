@@ -30,7 +30,7 @@ __all__ = ["jit", "program_id", "num_programs", "block_size", "tmem_words", "mxu
            "load", "store", "dot", "quantize", "stationary", "quantize_into", "exp2", "log2",
            "recip", "rsqrt", "abs", "maximum", "minimum", "max", "sum", "sumsq", "outer", "full",
            "zeros", "HalfTensor", "HalfTile", "load_fp16", "store_fp16", "pack_fp16",
-           "unpack_fp16", "matmul_fp16",
+           "unpack_fp16", "matmul_fp16", "dequantize_int4",
            "empty", "all_gather", "all_reduce", "range", "static_range", "kv_append", "Tensor", "QTensor",
            "KVDesc", "Tile", "CompileError", "LOG2E", "LN2"]
 
@@ -105,6 +105,11 @@ def store_fp16(desc: HalfTensor, x: HalfTile) -> None:
 def matmul_fp16(a: HalfTile, b: HalfTile, acc: Tile | None = None) -> Tile:
     """a[M, K] @ b[K, N], binary16 operands, ordered FP32 accumulation into acc."""
     return current().matmul_fp16(a, b, acc)
+
+
+def dequantize_int4(x: Tile, scales: HalfTile) -> HalfTile:
+    """Packed INT4 words and per-element binary16 scales -> a binary16 vector."""
+    return current().dequantize_int4(x, scales)
 
 
 def load(desc: Tensor, out: Tile | None = None) -> Tile:

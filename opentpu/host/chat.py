@@ -1052,6 +1052,13 @@ def main(argv=None):
                          "int8; fp16 is native W16A16 for dense Qwen3.5 on an FP16 target")
     ap.add_argument("--head-format", default=None, choices=["int8", "fp4", "int4", "nvfp4", "fp16"],
                     help="weight format of the LM head (default: --wformat)")
+    from opentpu.llm.precision import MODES
+    ap.add_argument("--precision", choices=MODES,
+                    help="explicit matrix precision for the staged dense Qwen3.5 engine")
+    ap.add_argument("--precisions", help="kind[@first-last]=mode rules (else OTPU_PRECISIONS)")
+    ap.add_argument("--head-precision", choices=MODES, help="override the LM head precision")
+    ap.add_argument("--w4-group", type=int, choices=(8, 16, 32, 64, 128), default=128,
+                    help="W4A16 K group size (default 128)")
     ap.add_argument("--no-prog-cache", action="store_true",
                     help="compile the decode loop's bucket programs in every process (by "
                          "default they are kept on disk: opentpu/progcache.py)")
@@ -1114,7 +1121,11 @@ def main(argv=None):
                          f"feed the turns' text as is")
     tokenizer = load_tokenizer(path)        # (on a thread, while the model loads)
     spec = load_spec(path)
-    wformat = FM.auto(spec, a.wformat)
+    if a.precision is None and (a.precisions is not None or a.head_precision is not None):
+        ap.error("--precisions and --head-precision require --precision")
+    if a.precision and (a.wformat != FM.AUTO or a.head_format is not None):
+        ap.error("--precision cannot be combined with --wformat or --head-format")
+    wformat = "fp16" if a.precision else FM.auto(spec, a.wformat)
     if wformat == "fp16" or a.head_format == "fp16":
         from opentpu.llm.qwen35 import Spec as Qwen35Spec
         if wformat != "fp16" or a.head_format not in (None, "fp16"):
@@ -1176,7 +1187,8 @@ def main(argv=None):
         if wformat == "fp16":
             from opentpu.llm.qwen35_fp16 import Engine as Fp16Engine
             eng = Fp16Engine(spec, load_weights(path), cap=a.cap, cfg=cfg, backend=backend,
-                             prog_cache=not a.no_prog_cache)
+                             prog_cache=not a.no_prog_cache, precision=a.precision,
+                             precisions=a.precisions, head_precision=a.head_precision, group=a.w4_group)
         elif streams:                     # the card's 4 GiB (the simulator's too: board_config)
             from opentpu.isasim import board_config
             eng = ST.engine(path, cfg or board_config(), backend, a.cap, a.pool or ST.DEFAULT,

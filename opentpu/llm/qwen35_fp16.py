@@ -7,7 +7,9 @@ import numpy as np
 
 from .. import fp16 as H, fp32 as F, language as ol
 from ..compiler import Compiled
-from ..kernels.fp16 import matmul, swiglu, _tiles
+from ..kernels.fp16 import _tiles
+from ..kernels.mixed import matmul, swiglu
+from . import precision as MP
 from ..kernels.deltanet import gates, l2norm_rows
 from ..kernels.fp16_attention import append, attend
 from ..kernels.lib import rmsnorm, rope, sigmoid, silu
@@ -141,7 +143,7 @@ class AttentionImage:
             images[0][addr:addr + len(raw)] = raw
 
 
-def attention_reference(spec, W, x, layer, pos, keys, values):
+def attention_reference(spec, W, x, layer, pos, keys, values, projector=None):
     """Ordered FP16/FP32 reference; caches [nkv,cap,d] are binary16 uint16.
 
     Returns (residual output, new keys, new values), leaving the input caches
@@ -158,7 +160,8 @@ def attention_reference(spec, W, x, layer, pos, keys, values):
         return F.mul(F.mul(x, scale[..., None]), F.add(W[p + name + ".weight"], np.float32(1)))
 
     def project(x, name):
-        return H.matmul(H.pack(x), H.pack(W[p + "self_attn." + name + "_proj.weight"].T))
+        w = W[p + "self_attn." + name + "_proj.weight"]
+        return projector(x, w, "w" + name) if projector else H.matmul(H.pack(x), H.pack(w.T))
 
     xn = norm(x, "input_layernorm")
     qg = project(xn, "q").reshape(rows, nq, 2 * d)
@@ -292,7 +295,7 @@ class LinearImage:
         images[0][addr:addr + x.nbytes] = np.ascontiguousarray(x).view(np.uint8).reshape(-1)
 
 
-def linear_reference(spec, W, x, layer, ring, state):
+def linear_reference(spec, W, x, layer, ring, state, projector=None):
     """Ordered FP16 projections / FP32 DeltaNet; state is [heads,dv,dk]."""
     p = f"model.layers.{layer}."
     nh, nk, dk, dv, K = spec.lin_heads, spec.lin_nk, spec.lin_dk, spec.lin_dv, spec.conv_k
@@ -304,7 +307,8 @@ def linear_reference(spec, W, x, layer, ring, state):
         return F.mul(F.mul(x, scale[:, None]), gain)
 
     def project(x, name):
-        return H.matmul(H.pack(x), H.pack(W[p + "linear_attn." + name + ".weight"].T))
+        w = W[p + "linear_attn." + name + ".weight"]
+        return projector(x, w, "delta") if projector else H.matmul(H.pack(x), H.pack(w.T))
 
     xn = norm(x, F.add(W[p + "input_layernorm.weight"], np.float32(1)))
     qkv, z, a, b = (project(xn, n) for n in ("in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b"))
@@ -404,7 +408,7 @@ class Image:
     formats = ""
     batch = 1
 
-    def __init__(self, spec, cfg, cap, W=None):
+    def __init__(self, spec, cfg, cap, W=None, *, policy=None, group=128):
         if not cfg.FP16 or cfg.S != 1 or not cfg.DSTEP:
             raise ValueError("FP16 model requires Config.FP16, S=1 and DSTEP")
         if getattr(spec, "moe", None) is not None or getattr(spec, "mtp", False):
@@ -412,6 +416,12 @@ class Image:
         if cap <= 0 or cap % 2:
             raise ValueError("FP16 model requires a positive even context capacity")
         self.spec, self.cfg, self.cap = spec, cfg, cap
+        self.policy, self.group = policy, group
+        if policy is not None:
+            if policy.layers != len(spec.kinds):
+                raise ValueError("precision policy layer count differs from checkpoint")
+            self.wformat, self.head_format = policy.mode, policy.head
+            self.formats = policy.label
         # A 128-column K-major tile uses 8K TMEM words and full memory beats.
         # Smaller test targets retain the 32-column tile; K order is identical.
         self.block = (1, 128, 128) if cfg.TMEM_WORDS >= 16384 else (1, 32, 32)
@@ -434,12 +444,19 @@ class Image:
                 LinearImage(spec, W, cfg, i, _defer=True)
             layer_args = sub.arguments
             del layer_args["x"], layer_args["out"]
+            if policy is not None:
+                for name, arg in layer_args.items():
+                    if isinstance(arg, HalfWeight):
+                        mode = policy(name if kind == "attn" else "delta", i)
+                        layer_args[name] = MP.weight(arg.array, mode, group)
             names = {n: f"layer{i}.{n}" for n in layer_args}
             args.update({names[n]: a for n, a in layer_args.items()})
             self.layer_names.append(names)
             p = f"model.layers.{i}."
             for name, proj in (("wg", "gate_proj"), ("wu", "up_proj"), ("wd", "down_proj")):
-                args[f"mlp{i}.{name}"] = HalfWeight(W[p + "mlp." + proj + ".weight"])
+                w = W[p + "mlp." + proj + ".weight"]
+                args[f"mlp{i}.{name}"] = HalfWeight(w) if policy is None else \
+                    MP.weight(w, policy("down" if name == "wd" else "gateup", i), group)
             args[f"mlp{i}.gain"] = Input(F.add(W[p + "post_attention_layernorm.weight"], np.float32(1)))
         args.update(mlp_xn=Input(np.zeros((1, spec.hidden), np.float32)),
                     gate=Input(np.zeros((1, spec.ffn), np.float32)),
@@ -447,6 +464,8 @@ class Image:
                     final_gain=Input(F.add(W["model.norm.weight"], np.float32(1))),
                     head=HalfWeight(self.embedding if spec.tied else W["lm_head.weight"]),
                     logits=Output((1, spec.vocab)))
+        if policy is not None:
+            args["head"] = MP.weight(args["head"].array, policy.head, group)
         dram, self.layout, bound = place(cfg, args, initialize=initialize)
         self.nbytes, self.bound = dram.next, bound[0]
         self.images = [m[:self.nbytes] for m in dram.images] if initialize else None
@@ -462,7 +481,7 @@ class Image:
             layer.update(x=self.bound["x"], out=self.bound["mixed"])
 
     def build(self, W):
-        filled = Image(self.spec, self.cfg, self.cap, W)
+        filled = Image(self.spec, self.cfg, self.cap, W, policy=self.policy, group=self.group)
         if filled.nbytes != self.nbytes:
             raise ValueError("checkpoint shapes changed the FP16 model layout")
         self.embedding = filled.embedding
@@ -505,14 +524,19 @@ class Engine:
     snapshot_bytes = 0
     batch = rows = 1
 
-    def __init__(self, spec, W, cap=2048, cfg=None, backend="isa", prog_cache=True):
+    def __init__(self, spec, W, cap=2048, cfg=None, backend="isa", prog_cache=True, *,
+                 precision=None, precisions=None, head_precision=None, group=128):
         from .. import target, imgcache as IC
         from .qwen3 import IsaBackend
         self.spec, self.cap = spec, cap
-        self.cfg = cfg or target.config("v80:fp16")
-        self.image = Image(spec, self.cfg, cap)
+        if precision is None and (precisions is not None or head_precision is not None):
+            raise ValueError("precision rules require an explicit base precision")
+        policy = MP.Policy(len(spec.kinds), precision, precisions, head_precision) if precision else None
+        self.cfg = cfg or target.config("v80:mixed" if policy else "v80:fp16")
+        self.image = Image(spec, self.cfg, cap, policy=policy, group=group)
         self.prog_cache = prog_cache
-        self.layout = ("qwen35-native-fp16-v1", spec, self.cfg, cap)
+        self.layout = ("qwen35-native-fp16-v1", spec, self.cfg, cap) if policy is None else \
+            ("qwen35-mixed-v1", spec, self.cfg, cap, policy.identity, group)
         self._programs, self.stats, self.poss = {}, [], [0]
         images = IC.build(self.image, W, self.layout)
         self.backend = IsaBackend(self.cfg, images) if backend == "isa" else backend(self.cfg, images)
@@ -594,8 +618,9 @@ class Engine:
 class Reference:
     """Ordered numerical oracle for qualification; never used by Engine."""
 
-    def __init__(self, spec, W, cap):
+    def __init__(self, spec, W, cap, *, policy=None, D=128, group=128):
         self.spec, self.W, self.cap, self.pos = spec, W, cap, 0
+        self.policy, self.D, self.group = policy, D, group
         self.states = []
         for kind in spec.kinds:
             if kind == "attn":
@@ -614,25 +639,28 @@ class Reference:
             scale = F.rsqrt(F.add(F.mul(F.rdot(x, x), np.float32(1 / spec.hidden)), np.float32(spec.eps)))
             return F.mul(F.mul(x, scale[:, None]), F.add(W[name], np.float32(1)))
 
-        def mm(x, w):
-            return H.matmul(H.pack(x), H.pack(w.T))
+        def mm(x, w, kind, layer=0):
+            mode = self.policy(kind, layer) if self.policy else "w16a16"
+            return MP.reference(x, w, mode, self.D, self.group)
 
         for i, kind in enumerate(spec.kinds):
             if kind == "attn":
-                x, k, v = attention_reference(spec, W, x, i, self.pos, *self.states[i])
+                x, k, v = attention_reference(spec, W, x, i, self.pos, *self.states[i],
+                                               projector=lambda x, w, kind: mm(x, w, kind, i))
             else:
-                x, k, v = linear_reference(spec, W, x, i, *self.states[i])
+                x, k, v = linear_reference(spec, W, x, i, *self.states[i],
+                                            projector=lambda x, w, kind: mm(x, w, kind, i))
             self.states[i] = k, v
             p = f"model.layers.{i}."
             xn = norm(x, p + "post_attention_layernorm.weight")
-            gate, up = (mm(xn, W[p + "mlp." + n + "_proj.weight"]) for n in ("gate", "up"))
-            x = F.add(x, mm(F.mul(F.silu(gate, np.float32(-ol.LOG2E)), up), W[p + "mlp.down_proj.weight"]))
+            gate, up = (mm(xn, W[p + "mlp." + n + "_proj.weight"], "gateup", i) for n in ("gate", "up"))
+            x = F.add(x, mm(F.mul(F.silu(gate, np.float32(-ol.LOG2E)), up), W[p + "mlp.down_proj.weight"], "down", i))
             if on_layer:
                 on_layer(i, x)
         x = norm(x, "model.norm.weight")
         weight = W["model.embed_tokens.weight"] if spec.tied else W["lm_head.weight"]
         logits = np.empty(spec.vocab, np.float32)
         for lo in range(0, spec.vocab, 4096):
-            logits[lo:lo + 4096] = mm(x, weight[lo:lo + 4096])[0]
+            logits[lo:lo + 4096] = mm(x, weight[lo:lo + 4096], "head")[0]
         self.pos += 1
         return logits

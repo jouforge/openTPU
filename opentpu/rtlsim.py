@@ -376,6 +376,8 @@ def top_params(cfg, dram_lat: int = 8, uarch: dict | None = None, axi: bool | in
         p["VPU_MAC"] = 1
     if getattr(cfg, "OUTER1", False) and not cfg.OUTER:  # OUTER decay one (otpu_vpu OUTER1)
         p["VPU_OUTER1"] = 1
+    if getattr(cfg, "W4A16", False):
+        p["W4A16"] = 1
     if getattr(cfg, "FP16", False):
         p["FP16"] = 1
     if getattr(cfg, "QONCE", False):                     # QACT ST, LDA (otpu_quant / otpu_dma)

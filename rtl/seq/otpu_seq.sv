@@ -95,7 +95,8 @@ module otpu_seq
   // quantize-once (Config.QONCE; docs/isa.md "Quantize once"; otpu_pkg QO): QACT flag ST (w3 +=
   // R[rc]: its DRAM rows) and LDA (otpu_dma LDA: w1 += R[ra], w2 and w3 immediates)
   parameter bit QONCE      = 1'b0,
-  parameter bit FP16       = 1'b0     // HMM / HCVT (docs/fp16.md)
+  parameter bit FP16       = 1'b0,    // HMM / HCVT (docs/fp16.md)
+  parameter bit W4A16      = 1'b0     // HDQ (docs/mixed_precision.md)
 ) (
   input  logic                clk,
   input  logic                rst,
@@ -259,7 +260,7 @@ module otpu_seq
     logic w0;
     s = '0; a = '0; t0 = '0; t1 = '0; t2 = '0; t3 = '0; t4 = '0; h = '0; w0 = 1'b0;
     case (op)
-      OP_HMM, OP_HCVT: begin
+      OP_HMM, OP_HCVT, OP_HDQ: begin
         t0 = f.wr[0]; w0 = 1'b1; t1 = f.rd[0]; t2 = f.rd[1];
       end
       OP_LD: begin
@@ -623,7 +624,8 @@ module otpu_seq
   end
   int dunit;
   always_comb dunit = ((!STREAMS && (op == OP_DSTEP || op == OP_STREAM)) || (!QONCE && op == OP_LDA) ||
-                      (!FP16 && (op == OP_HMM || op == OP_HCVT)))
+                      (!FP16 && (op == OP_HMM || op == OP_HCVT)) ||
+                      ((!FP16 || !W4A16) && op == OP_HDQ))
                       ? -1 : unit_of(op);
 
   // ---- dispatch pipeline: R (the instruction at pc: registers resolved) -> P (footprint

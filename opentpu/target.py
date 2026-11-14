@@ -121,7 +121,7 @@ URAM_KEYS = ("ACT_UCOLS",)
 ARCH_DEFAULTS = {"WG": 1, "OUTER": True, "DSTEP2": False, "KT": False, "AW": 32, "BHW": 0,
                  "ICACHE": False, "SEXACT": False, "ST16": "", "FSUM": False, "VSIG": False,
                  "VMAC": False, "KVSPLIT": 0, "SPLITQ": False, "ST16S": False, "QHL": False,
-                 "QSTHL": False, "OUTER1": False, "SPLMM": False, "FP16": False,
+                 "QSTHL": False, "OUTER1": False, "SPLMM": False, "FP16": False, "W4A16": False,
                  "DNCHUNK": 0, "QONCE": False, "DNMERGE": 0}
 ST16_CODES = {"": 0, "e6m9": 1, "bf16": 2}    # [arch] ST16: otpu_dma ST16 (isa.ST16_CODE)
 AW_MAX = 40                     # DRAM address bits a target may state (Config.AW: 32 .. AW_MAX)
@@ -293,6 +293,8 @@ def load(name: str | None = None) -> Target:
         raise TargetError(f"{path}: bad arch (S >= 1, D a multiple of 32, LANES a power of two)")
     wg = a["WG"]
     hl = raw["uarch"]["ULANES"]
+    if a["W4A16"] and not a["FP16"]:
+        raise TargetError(f"{path}: W4A16 requires FP16")
     if a["FP16"] and (hl < 2 or hl & (hl - 1)):
         raise TargetError(f"{path}: FP16 needs ULANES a power of two >= 2")
     if wg < 1 or wg & (wg - 1) or wg > a["MCOLS"]:
@@ -537,6 +539,8 @@ def arch_hash(cfg) -> int:
         d.pop("OUTER1", None)
     if not d.get("QONCE"):
         d.pop("QONCE", None)
+    if not d.get("W4A16"):
+        d.pop("W4A16", None)
     if not d.get("FP16"):
         d.pop("FP16", None)
     if not d.get("SPLMM"):
@@ -620,6 +624,8 @@ def sim_uarch(t: Target | str | None = None) -> dict:
         d["VPU_MAC"] = 1
     if t.arch["OUTER1"]:                        # otpu_vpu's VOP OUTER decay one
         d["VPU_OUTER1"] = 1
+    if t.arch["W4A16"]:
+        d["W4A16"] = 1
     if t.arch["FP16"]:
         d["FP16"] = 1
     if t.arch["QONCE"]:                         # otpu_quant's QACT ST, otpu_dma's LDA
@@ -700,6 +706,7 @@ def rtl_params(t: Target | str | None = None) -> dict:
       | ({"VPU_SIG": 1} if a["VSIG"] else {}) \
       | ({"VPU_MAC": 1} if a["VMAC"] else {}) \
       | ({"VPU_OUTER1": 1} if a["OUTER1"] else {}) \
+      | ({"W4A16": 1} if a["W4A16"] else {}) \
       | ({"FP16": 1} if a["FP16"] else {}) \
       | ({"QONCE": 1} if a["QONCE"] else {}) \
       | ({"MXU_SPL": 1} if a["SPLMM"] else {}) \
@@ -799,6 +806,8 @@ def build_config(t: Target | str | None = None, **knobs):
     if knobs.get("OUTER1") is not None:
         a["OUTER1"] = bool(int(knobs["OUTER1"]))
     a["OUTER1"] = a["OUTER1"] and a["VMAC"] and not a["OUTER"]
+    if knobs.get("W4A16") is not None:
+        a["W4A16"] = bool(int(knobs["W4A16"]))
     if knobs.get("FP16") is not None:
         a["FP16"] = bool(int(knobs["FP16"]))
     if knobs.get("QONCE") is not None:

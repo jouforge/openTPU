@@ -32,6 +32,7 @@ module tb_top;
   parameter bit QUANT_QSTHL = 1'b0;   // QST HL: a GRP ROW QST's hi and lo from one read (otpu_quant QSTHL; Config.QSTHL)
   parameter bit QONCE      = 1'b0;    // QACT flag ST and LDA (Config.QONCE)
   parameter bit FP16       = 1'b0;    // HMM / HCVT (Config.FP16, CAPS2 bit26)
+  parameter bit W4A16      = 1'b0;    // HDQ (Config.W4A16, CAPS2 bit27)
   parameter int VPU_CL     = (LANES >= 8) ? LANES / 4 : 1;
   parameter int ULANES     = LANES;
   parameter int AXI        = 0;       // otpu_top's memory path (1: the board's, native; 2: the
@@ -112,7 +113,7 @@ module tb_top;
 
   otpu_top #(.S(S), .D(D), .MCOLS(MCOLS), .ACT_BLOCKS(ACT_BLOCKS), .ACT_ROWS(ACT_ROWS), .TMEM_WORDS(TMEM_WORDS),
              .IMEM_WORDS(IMEM_WORDS), .DRAM_WORDS(DRAM_WORDS), .DRAM_LAT(DRAM_LAT),
-             .LANES(LANES), .WIN(WIN), .RPB(RPB), .WPB(WPB), .MXU_IMPL(MXU_IMPL), .MXU_CL(MXU_CL), .MXU_E(MXU_E), .MXU_QD(MXU_QD), .QUANT_XD(QUANT_XD), .QUANT_R1(QUANT_R1), .QUANT_PW(QUANT_PW), .QUANT_SPLIT(QUANT_SPLIT), .QUANT_HL(QUANT_HL), .QUANT_SWW(QUANT_SWW), .QUANT_QSTB(QUANT_QSTB), .QUANT_QSTHL(QUANT_QSTHL), .QONCE(QONCE), .FP16(FP16), .VPU_CL(VPU_CL), .ULANES(ULANES), .AXI(AXI), .FIFO_DEPTH(FIFO_DEPTH),
+             .LANES(LANES), .WIN(WIN), .RPB(RPB), .WPB(WPB), .MXU_IMPL(MXU_IMPL), .MXU_CL(MXU_CL), .MXU_E(MXU_E), .MXU_QD(MXU_QD), .QUANT_XD(QUANT_XD), .QUANT_R1(QUANT_R1), .QUANT_PW(QUANT_PW), .QUANT_SPLIT(QUANT_SPLIT), .QUANT_HL(QUANT_HL), .QUANT_SWW(QUANT_SWW), .QUANT_QSTB(QUANT_QSTB), .QUANT_QSTHL(QUANT_QSTHL), .QONCE(QONCE), .FP16(FP16), .W4A16(W4A16), .VPU_CL(VPU_CL), .ULANES(ULANES), .AXI(AXI), .FIFO_DEPTH(FIFO_DEPTH),
              .TMEM_IMPL(TMEM_IMPL), .TMEM_RQ(TMEM_RQ), .TMEM_NCP(TMEM_NCP),
              .TMEM_NSB(TMEM_NSB), .TMEM_SBP(TMEM_SBP), .TMEM_SBH(TMEM_SBH),
              .TMEM_RPL(TMEM_RPL), .TMEM_TDP(TMEM_TDP), .TMEM_GST(TMEM_GST),

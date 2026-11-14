@@ -145,6 +145,7 @@ CAP2_QONCE = 1 << 24
 CAP2_SPLMM = 1 << 25
 # CAPS2 bit26: HMM / HCVT, native binary16 operands and FP32 accumulation (Config.FP16).
 CAP2_FP16 = 1 << 26
+CAP2_W4A16 = 1 << 27        # HDQ: signed INT4 and binary16 scales to binary16
 # X2 window, docs/x2_link.md (otpu_ctrl's mux, not
 # otpu_link_pkg's old A_* map). X2_SEQ and COLL_STATUS / WD are the hub's additions.
 R_X2_CARD, R_X2_CTRL, R_X2_INFO, R_X2_SEQ = 0x300, 0x304, 0x308, 0x30C
@@ -190,7 +191,7 @@ def caps2(v: int | None) -> dict:
             "qhl": bool(v & CAP2_QHL), "qsthl": bool(v & CAP2_QSTHL),
             "vsig": bool(v & CAP2_VSIG), "vmac": bool(v & CAP2_VMAC),
             "outer1": bool(v & CAP2_OUTER1), "qonce": bool(v & CAP2_QONCE),
-            "splmm": bool(v & CAP2_SPLMM), "fp16": bool(v & CAP2_FP16)}
+            "splmm": bool(v & CAP2_SPLMM), "fp16": bool(v & CAP2_FP16), "w4a16": bool(v & CAP2_W4A16)}
 
 
 # ---- version 4: the configuration (otpu_ctrl CFG_*; docs/targets.md)

@@ -2013,7 +2013,7 @@ def test_sampler_stream_picks_as_pick():
 
 
 # ------------------------------------------------------------------------------ otpu-diag
-@pytest.mark.parametrize("reserved", [0, 1 << 27])
+@pytest.mark.parametrize("reserved", [0, 1 << 28])
 def test_diag_fp16_capability_and_reserved_bits(monkeypatch, tmp_path, no_cfg_env, reserved):
     from opentpu import target
     from opentpu.host import diag

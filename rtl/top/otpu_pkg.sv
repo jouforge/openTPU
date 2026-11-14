@@ -8,7 +8,7 @@ package otpu_pkg;
                          OP_DSTEP = 8'h12, OP_STREAM = 8'h13, OP_LDA = 8'h14, OP_MM = 8'h20,
                          OP_QACT = 8'h21,
                          OP_QST = 8'h22,
-                         OP_HMM = 8'h23, OP_HCVT = 8'h24,
+                         OP_HMM = 8'h23, OP_HCVT = 8'h24, OP_HDQ = 8'h25,
                          OP_VOP = 8'h30, OP_GATHER = 8'h40;
 
   localparam logic [7:0] V_ADD = 0, V_SUB = 1, V_RSUB = 2, V_MUL = 3, V_MAX = 4, V_MIN = 5,
@@ -122,7 +122,7 @@ package otpu_pkg;
   function automatic int unit_of(input logic [7:0] op);
     case (op)
       OP_LD, OP_ST, OP_DSTEP, OP_STREAM, OP_WAITW, OP_LDA: return U_DMA;
-      OP_MM, OP_HMM, OP_HCVT: return U_MXU;
+      OP_MM, OP_HMM, OP_HCVT, OP_HDQ: return U_MXU;
       OP_QACT, OP_QST:   return U_Q;
       OP_VOP:            return U_VPU;
       OP_BAR, OP_GATHER, OP_RLD: return U_COLL;   // RLD: read locally (otpu_slice)
@@ -347,6 +347,12 @@ package otpu_pkg;
     logic [31:0] rows, cols, n, kb, m, nc;
     f = '0;
     case (c.op)
+      OP_HDQ: begin
+        n = c.w4;
+        f.rd[0] = mk(SP_TMEM, c.w2, (n + 7) >> 3);
+        f.rd[1] = mk(SP_TMEM, c.w3, (n + 1) >> 1);
+        f.wr[0] = mk(SP_TMEM, c.w1, (n + 1) >> 1);
+      end
       OP_HCVT: begin
         n = c.w3;
         f.rd[0] = mk(SP_TMEM, c.w2, c.flags[0] ? (n + 1) >> 1 : n);

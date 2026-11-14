@@ -20,6 +20,7 @@ from opentpu.host.chat import make_backend
 from opentpu.llm.qwen3 import load_weights
 from opentpu.llm.qwen35 import Spec, reference_logits
 from opentpu.llm.qwen35_fp16 import Engine, Reference
+from opentpu.llm.precision import MODES, Policy
 
 
 def main():
@@ -30,16 +31,22 @@ def main():
     p.add_argument("--tokens", type=int, nargs="+", default=[198, 17])
     p.add_argument("--cap", type=int, default=8)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--precision", choices=MODES)
+    p.add_argument("--precisions")
+    p.add_argument("--head-precision", choices=MODES)
+    p.add_argument("--w4-group", type=int, choices=(8, 16, 32, 64, 128), default=128)
     a = p.parse_args()
     W, spec = load_weights(a.model), Spec.from_hf(a.model)
     backend, cfg = make_backend(a.backend, spec, a.cap, a.dev, a.model.name, wformat="fp16")
-    cfg = cfg or target.config("v80:fp16", DRAM_BYTES=4 << 30)
+    cfg = cfg or target.config("v80:mixed" if a.precision else "v80:fp16", DRAM_BYTES=4 << 30)
     start = time.monotonic()
-    eng = Engine(spec, W, cfg=cfg, cap=a.cap, backend=backend)
+    eng = Engine(spec, W, cfg=cfg, cap=a.cap, backend=backend, precision=a.precision,
+                 precisions=a.precisions, head_precision=a.head_precision, group=a.w4_group)
     report = dict(model=str(a.model.resolve()), backend=a.backend, cap=a.cap,
+                  precision=a.precision, rules=eng.image.formats, head=eng.image.head_format, group=a.w4_group,
                   image_bytes=eng.image.nbytes, load_s=time.monotonic() - start, runs=[])
     print(json.dumps(report), flush=True)
-    ref = Reference(spec, W, a.cap)
+    ref = Reference(spec, W, a.cap, policy=eng.image.policy, D=cfg.D, group=a.w4_group)
     run, stages, residuals = eng.backend.run, [0], []
 
     def observe(programs):

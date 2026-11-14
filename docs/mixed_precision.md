@@ -72,10 +72,33 @@ an identity while different operator choices do not alias.
 
 ## Integration and acceptance
 
-The numerical/selection foundation is implemented and tested. Device decode,
-compiler/runtime placement, model dispatch and CLI integration are subsequent
-gates; importing the oracle does not add W4A16 support to a bitstream. Keep the
-currently programmed, qualified FP16 image until its replacement passes checks.
+The numerical contract, HDQ instruction, compiler/runtime placement, kernels and
+staged model dispatch are implemented. `v80:mixed` enables FP16 and W4A16;
+`v80:fp16` retains its qualified architecture hash. The new variant is **not yet
+board-qualified**. Keep the qualified FP16 image until its replacement passes
+route and deployment checks.
+
+The explicit chat interface is:
+
+```bash
+otpu-chat --model /path/to/Qwen3.5-0.8B --backend isa \
+  --precision w16a16 --precisions 'mlp=w4a16,attn=w8a8' \
+  --head-precision w16a16 --w4-group 128 --cap 2048
+```
+
+This example illustrates selection, not a recommended quality policy. Use
+`--backend board --dev qdma:BDF@Q` only after programming a matching image.
+Do not combine `--precision` with legacy `--wformat` or `--head-format`.
+The staged engine currently supports dense Qwen3.5 text, one sequence, no MTP,
+and a positive even context capacity. Full-K W8A8 projections require K divisible
+by the target's D and enough ACT/TMEM capacity; W4A16 uses K groups independently
+of the requested kernel K tile size. W16A16 retains its existing K tiling.
+The cache ABI includes the resolved precision policy and W4 group size. Normal
+FP16 invocation keeps its existing cache ABI and ignores OTPU_PRECISIONS.
+
+`tools/fp16_model_check.py` accepts the same precision arguments and checks each
+layer residual, persistent state and logits against the selected numerical
+oracle, then reports differences against the independent FP32 reference.
 
 1. Numerical oracle and rules: exhaustive decoding of every half scale encoding
    with all 16 codes, independent rounding/packing checks, short groups, odd N/K,

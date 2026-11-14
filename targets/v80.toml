@@ -101,3 +101,8 @@ csr_bytes = 1048576
 # Explicit variant; the default stays INT8/MX.
 [variants.fp16]
 FP16 = true
+
+# Mixed-precision development variant; board qualification is tracked separately.
+[variants.mixed]
+FP16 = true
+W4A16 = true

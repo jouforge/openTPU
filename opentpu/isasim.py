@@ -122,6 +122,7 @@ class Config:
     #                          +8 (one epilogue: the chunked DeltaNet core's MMs); off, the bit
     #                          refused
     FP16: bool = False       # HMM / HCVT: native FP16 operands, FP32 accumulation (CAPS2 bit26)
+    W4A16: bool = False      # HDQ: packed signed INT4 decode to half (CAPS2 bit27)
     SEXACT: bool = False     # a compile choice, not the hardware's (never in the CFG_HASH): at
     #                          S > 1 Qwen3.5's images S-exact (qwen35.s_exact_on: S = 1's
     #                          DeltaNet head groups and dense MLP chunks over the slices, so the
@@ -474,7 +475,7 @@ class Slice:
             return self._lda(ins)
         if op == I.MM:
             return self._mm(ins)
-        if op in (I.HMM, I.HCVT):
+        if op in (I.HMM, I.HCVT, I.HDQ):
             return self._half(ins)
         if op == I.QACT:
             return self._qact(ins)
@@ -503,6 +504,24 @@ class Slice:
             idx = base + np.arange(rows)[:, None] * stride + np.arange(cols)[None, :] // 2
             return ((self.tmem[idx] >> ((np.arange(cols) & 1) * 16)) & 65535).astype(np.uint16)
 
+        if ins.op == I.HDQ:
+            from . import int4 as Q4
+            if not self.cfg.W4A16:
+                raise SimError("HDQ: this configuration has no W4A16 (Config.W4A16)")
+            n, b = w[3], self.ta(ins.rc, w[2])
+            if ins.flags or n > 65535 or any(w[4:]):
+                raise SimError("HDQ: invalid flags, count or reserved words")
+            nw = (n + 1) // 2
+            check_range(dst, nw); separate(a, (n + 7) // 8, nw); separate(b, nw, nw)
+            if not n:
+                return
+            cols = np.arange(n)
+            q = ((self.tmem[a + cols // 8] >> (4 * (cols % 8))) & 15).astype(np.int8)
+            q = np.where(q >= 8, q - 16, q).astype(np.int8)
+            h = np.zeros(n + (n & 1), np.uint32)
+            h[:n] = Q4.dequantize(q, half_rows(b, 1, n, nw)[0])
+            self.tmem[dst:dst + nw] = h[::2] | (h[1::2] << 16)
+            return
         if ins.op == I.HCVT:
             n = w[2]
             if ins.flags & ~1 or n > 65535 or any(w[3:]):

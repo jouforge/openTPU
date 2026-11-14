@@ -86,7 +86,7 @@ DEFAULT = 0x0111_0111 | (VMASK << 32)  # a pc never reached: every unit's last, 
 FOLLOW = 1 << 28                  # the counts' word: a VOP follows the GATHER its k_4 names
 FOLLOWS = (I.V_RSUM, I.V_RSSQ, I.V_RMAX, I.V_ARGMAX)    # the functions that may (A alone)
 UNIT = {I.LD: U_DMA, I.ST: U_DMA, I.DSTEP: U_DMA, I.STREAM: U_DMA, I.WAITW: U_DMA,
-        I.LDA: U_DMA, I.MM: U_MXU, I.HMM: U_MXU, I.HCVT: U_MXU, I.QACT: U_Q, I.QST: U_Q, I.VOP: U_VPU,
+        I.LDA: U_DMA, I.MM: U_MXU, I.HMM: U_MXU, I.HCVT: U_MXU, I.HDQ: U_MXU, I.QACT: U_Q, I.QST: U_Q, I.VOP: U_VPU,
         I.BAR: U_COLL, I.GATHER: U_COLL, I.RLD: U_COLL}
 WUNIT = (U_DMA, U_MXU, U_Q, U_VPU, U_COLL, U_DMA, U_Q)
 DEPTH = tuple(VMAX if u == U_VPU else KMAX for u in range(NUNITS))   # history per unit (window 16)
@@ -237,6 +237,11 @@ def footprint(ins: I.Instr, R, D: int = 128, S: int = 1, aw: int = 32) -> Fp:
         rd.append(mk(SP_DRAM, w[0], c[2] << 2)); wr.append(mk(SP_TMEM, w[1], c[2]))
     elif op == I.ST:
         rd.append(mk(SP_TMEM, w[1], c[2])); wr.append(mk(SP_DRAM, w[0], c[2] << 2))
+    elif op == I.HDQ:
+        n = c[3]
+        rd.append(mk(SP_TMEM, w[1], (n + 7) // 8))
+        rd.append(mk(SP_TMEM, w[2], (n + 1) // 2))
+        wr.append(mk(SP_TMEM, w[0], (n + 1) // 2))
     elif op == I.HCVT:
         n = c[2]
         rd.append(mk(SP_TMEM, w[1], (n + 1) // 2 if fl & 1 else n))

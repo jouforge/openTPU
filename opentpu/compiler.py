@@ -331,6 +331,15 @@ class HalfTensor:
 
 
 @dataclass
+class Int4Tensor:
+    """K-major packed signed INT4 weights and binary16 scales, distinct from MX QTensor."""
+    words: Tensor
+    scales: HalfTensor
+    shape: tuple
+    group: int
+
+
+@dataclass
 class QTensor:
     """A weight matrix [rows, cols] in an MXU format -- the MXU's streamed operand: element rows
     rs bytes apart and a scale row per row, srs bytes apart (docs/isa.md "Weight formats": the
@@ -2103,6 +2112,56 @@ class Builder:
         for r in builtins.range(out.rows):
             self.emit(I.hcvt(out.base + r * out.rs, x.base + r * x.rs, out.cols,
                              unpack=True, comment="unpack fp16"))
+        return out
+
+    def dequantize_int4(self, x: Tile, scales: HalfTile) -> HalfTile:
+        """Low-nibble-first TMEM codes and per-column scales, one vector."""
+        self._half_live(x, Tile)
+        self._half_live(scales, HalfTile)
+        if not self.cfg.W4A16:
+            raise CompileError("INT4 decode requires Config.W4A16")
+        n = scales.shape[-1]
+        if len(scales.shape) != 1 or x.shape != ((n + 7) // 8,):
+            raise CompileError("INT4 decode requires a packed word vector and half scale vector")
+        out = self._half_alloc((n,))
+        self.emit(I.hdq(out.base, x.base, scales.base, n, comment="decode int4 to fp16"))
+        return out
+
+    def load_int4(self, desc: Int4Tensor, start, depth: int, col, cols: int) -> HalfTile:
+        """One K group/column tile from packed DRAM to half TMEM; no expanded DRAM copy."""
+        if not isinstance(desc, Int4Tensor) or not self.cfg.W4A16:
+            raise CompileError("load_int4 requires an Int4Tensor and Config.W4A16")
+        self._half_shape((depth, cols))
+        if depth > desc.group:
+            raise CompileError("load_int4 cannot cross a K group")
+
+        def bounds(x, length, limit):
+            a = Affine.of(x)
+            lo = hi = a.const
+            for v, c in a.terms.items():
+                if not isinstance(v, Loop) or v.rcount or v.count <= 0:
+                    raise CompileError("load_int4 requires bounded tile addresses")
+                span = c * (v.count - 1)
+                lo, hi = lo + min(0, span), hi + max(0, span)
+            if lo < 0 or hi + length > limit:
+                raise CompileError("load_int4 tile exceeds its logical weight shape")
+
+        bounds(start, depth, desc.shape[0])
+        bounds(col, cols, desc.shape[1])
+
+        def divide(x, size):
+            a = Affine.of(x)
+            if a.const % size or any(c % size for c in a.terms.values()):
+                raise CompileError("load_int4 requires a whole K group and word-aligned columns")
+            return Affine(a.const // size, {v: c // size for v, c in a.terms.items()})
+
+        group, word = divide(start, desc.group), divide(col, 8)
+        scale = self.load_fp16(desc.scales[group, col:col + cols])
+        out = self._half_alloc((depth, cols))
+        for r in builtins.range(depth):
+            packed = self.load(desc.words[start + r, word:word + (cols + 7) // 8])
+            self.emit(I.hdq(out.base + r * out.rs, packed.base, scale.base, cols,
+                           comment="load int4 row to fp16"))
         return out
 
     def load_fp16(self, desc: HalfTensor) -> HalfTile:

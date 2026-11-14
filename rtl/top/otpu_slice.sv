@@ -68,6 +68,7 @@ module otpu_slice
   parameter bit QUANT_QSTHL = 1'b0,   // QST HL: a GRP ROW QST's hi and lo from one read (otpu_quant QSTHL; Config.QSTHL)
   parameter bit QONCE      = 1'b0,    // QACT flag ST and LDA (otpu_quant, otpu_dma, otpu_actram DPORT, otpu_seq; Config.QONCE)
   parameter bit FP16       = 1'b0,    // HMM / HCVT (Config.FP16, CAPS2 bit26)
+  parameter bit W4A16      = 1'b0,    // HDQ (Config.W4A16, CAPS2 bit27)
   parameter int VPU_CL     = (LANES >= 8) ? LANES / 4 : 1,  // VPU lanes with the composite functions
   parameter int ULANES     = LANES,   // TMEM lanes of the MXU and the quantizer (<= LANES)
   parameter int PQ_WIN     = 64,      // cycles per P/Q counter window (+bucket= in simulation)
@@ -357,7 +358,7 @@ module otpu_slice
              .WIN(WIN), .STREAMS(HAS_SS), .WG(WG), .WAITC(SEQ_WC), .STYLE(IMEM_STYLE),
              .WSTYLE(IMEM_WC_STYLE),
              .DSTEP2(DSTEP2 && HAS_SS), .FOLLOW(FOL), .QB(QB), .AW(AW),
-             .ICACHE(ICACHE), .IC_LINES(IC_LINES), .IC_PF(IC_PF), .QONCE(QONCE), .FP16(FP16)) u_seq (
+             .ICACHE(ICACHE), .IC_LINES(IC_LINES), .IC_PF(IC_PF), .QONCE(QONCE), .FP16(FP16), .W4A16(W4A16)) u_seq (
     .clk, .rst(srst), .ucmd(ucmd_s), .ustart(ustart_s), .urel, .ufol(ufol_s), .urdy(urdy_s),
     .udone(udone_s),
     .halted(sq_halted), .error(sq_err),
@@ -727,13 +728,14 @@ module otpu_slice
     logic [ULANES-1:0][31:0] ha, wa, wd, ad, data_q;
     typedef enum logic [1:0] {R_IDLE, R_ASK, R_REPLAY, R_DATA} rs_t;
     rs_t rs;
-    wire half_cmd = ucmd[U_MXU].op == OP_HMM || ucmd[U_MXU].op == OP_HCVT;
+    wire half_cmd = ucmd[U_MXU].op == OP_HMM || ucmd[U_MXU].op == OP_HCVT ||
+                    (W4A16 && ucmd[U_MXU].op == OP_HDQ);
     assign im_start = ustart[U_MXU] && !half_cmd;
     assign im_go = urel && !sel;
     assign r_mxu = !busy && h_rdy && im_rdy;
     assign d_mxu = im_done || h_done;
     assign im_lost = tm_lost[P_MXU] && !sel;
-    otpu_hmxu #(.N(ULANES)) u_half (
+    otpu_hmxu #(.N(ULANES), .W4A16(W4A16)) u_half (
       .clk, .rst(rst_mxu), .start(pending && urel), .cmd(hcmd),
       .rdy(h_rdy), .done(h_done), .r_req(hr), .r_addr(ha), .r_ready(rs == R_IDLE),
       .r_valid(rv), .r_data(data_q), .w_req(hw), .w_addr(wa), .w_data(wd), .w_ready(gnt[G_MXU])

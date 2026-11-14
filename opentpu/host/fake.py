@@ -279,6 +279,7 @@ class FakeTransport:
                     | (R.CAP2_VMAC if current().arch.get("VMAC") else 0)
                     | (R.CAP2_OUTER1 if current().arch.get("OUTER1") else 0)
                     | (R.CAP2_FP16 if current().arch.get("FP16") else 0)
+                    | (R.CAP2_W4A16 if current().arch.get("W4A16") else 0)
                     | (R.CAP2_QONCE if current().arch.get("QONCE") else 0)
                     | (R.CAP2_SPLMM if current().arch.get("SPLMM") else 0))
         if off == R.R_CAPS:

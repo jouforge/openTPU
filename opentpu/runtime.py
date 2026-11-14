@@ -22,7 +22,7 @@ import numpy as np
 from . import fp32 as F
 from . import fp16 as H
 from . import quant as Q
-from .compiler import (Affine, Compiled, HalfTensor, KVDesc, Kernel, QTensor, Tensor, k_scale_bytes,
+from .compiler import (Affine, Compiled, HalfTensor, Int4Tensor, KVDesc, Kernel, QTensor, Tensor, k_scale_bytes,
                        gall_wg, kv_bytes, kv_rows)
 from .isasim import Config, Machine
 
@@ -90,6 +90,22 @@ class Weight:
         self.array, self.shard, self.fmt = a, shard, fmt
 
 
+class Int4Weight:
+    """W4A16 [N,K]: packed signed INT4 and half scales per K group/output column.
+
+    Unlike Weight(fmt="int4"), these weights multiply half activations. Only
+    output-row sharding is supported, preserving increasing-K accumulation.
+    """
+
+    def __init__(self, array, shard: int | None = None, group: int = 128):
+        a = np.asarray(array, np.float32)
+        if a.ndim != 2 or min(a.shape) <= 0 or shard not in (None, 0):
+            raise ValueError("Int4Weight requires nonempty [N,K], shard None or 0")
+        if not isinstance(group, int) or group < 8 or group > 128 or group & (group - 1):
+            raise ValueError("Int4Weight group must be a power of two in 8..128")
+        self.array, self.shard, self.group = a, shard, group
+
+
 class KVCache:
     def __init__(self, k, v, capacity: int):
         k = np.asarray(k, dtype=np.float32)
@@ -152,9 +168,9 @@ class Layout:
 def place(cfg: Config, args: dict, weights_at: int | None = None, *,
           initialize: bool = True) -> tuple[_Dram, Layout, list]:
     """Lay out host args in DRAM. Returns images, layout and per-slice bound kernel arguments.
-    weights_at: Weight / HalfWeight allocations from that byte address on (an image's
+    weights_at: Weight / HalfWeight / Int4Weight allocations from that byte address on (an image's
     weights above 4 GiB, AW > 32), the rest from 0. initialize=False lays out
-    Input/HalfInput/HalfWeight/Output arguments without copying their values;
+    Input/HalfInput/Weight/HalfWeight/Int4Weight/Output without copying or quantizing values;
     model image caches can compile against that layout before loading weights.
     """
     S, D = cfg.S, cfg.D
@@ -162,8 +178,8 @@ def place(cfg: Config, args: dict, weights_at: int | None = None, *,
     layout = Layout()
     bound = [dict() for _ in range(S)]
     for name, a in args.items():
-        if not initialize and isinstance(a, (Weight, KVCache)):
-            raise ValueError("layout-only placement supports unquantized arguments")
+        if not initialize and isinstance(a, KVCache):
+            raise ValueError("layout-only placement does not support KVCache")
         if isinstance(a, Input):
             addr = dram.alloc(a.array.nbytes)
             for s in range(S if initialize else 0):
@@ -199,6 +215,28 @@ def place(cfg: Config, args: dict, weights_at: int | None = None, *,
             desc = HalfTensor(Tensor(Affine(addr), (k, nloc), (stride, 1), a, esize=2))
             for s in range(S):
                 bound[s][name] = desc
+        elif isinstance(a, Int4Weight):
+            from . import int4 as Q4
+            if not cfg.FP16 or not cfg.W4A16:
+                raise ValueError("Int4Weight requires Config.FP16 and Config.W4A16")
+            n, k = a.array.shape
+            if a.shard == 0 and n % S:
+                raise ValueError(f"{name}: {n} rows not divisible by {S} slices")
+            nloc = n // S if a.shard == 0 else n
+            words, stride, groups = (nloc + 7) // 8, (nloc + 1) // 2 * 2, (k + a.group - 1) // a.group
+            addr = dram.alloc(4 * k * words, high=True)
+            scales = dram.alloc(2 * groups * stride, high=True)
+            for s in range(S if initialize else 0):
+                part = a.array[s * nloc:(s + 1) * nloc] if a.shard == 0 else a.array
+                packed = Q4.quantize(part, a.group)
+                dram.put(s, addr, packed.words)
+                dram.put(s, scales, packed.scales)
+            layout.params[name] = (a, (addr, scales))
+            desc = Int4Tensor(Tensor(Affine(addr), (k, words), (words, 1)),
+                             HalfTensor(Tensor(Affine(scales), (groups, nloc), (stride, 1), esize=2)),
+                             (k, nloc), a.group)
+            for s in range(S):
+                bound[s][name] = desc
         elif isinstance(a, Output):
             n = int(np.prod(a.shape))
             addr = dram.alloc(4 * n)
@@ -226,7 +264,7 @@ def place(cfg: Config, args: dict, weights_at: int | None = None, *,
             rs, srs = Q.grp_row_bytes(K, a.fmt, D, wg), Q.grp_scale_bytes(K, a.fmt, D, wg)
             daddr = dram.alloc(G * rs, max(ALIGN, wg * D), high=True)
             saddr = dram.alloc(G * srs, max(ALIGN, Q.swp(a.fmt, R)), high=True)
-            for s, p in enumerate(parts):
+            for s, p in enumerate(parts if initialize else []):
                 q, sc = Q.quantize_grouped(p, a.fmt, wg, D, at=daddr if cfg.CHASH else None)
                 dram.put(s, daddr, q)
                 dram.put(s, saddr, sc)

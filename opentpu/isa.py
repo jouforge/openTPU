@@ -9,6 +9,7 @@ NOP, HALT, LI, ADDI, LOOP, BAR, RLD, WAITW = 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
 LD, ST, DSTEP, STREAM, LDA = 0x10, 0x11, 0x12, 0x13, 0x14
 MM, QACT, QST = 0x20, 0x21, 0x22
 HMM, HCVT = 0x23, 0x24               # Config.FP16: packed TMEM matrices and conversion
+HDQ = 0x25                          # Config.W4A16: signed INT4 * half scale -> half
 VOP = 0x30
 GATHER = 0x40
 
@@ -16,7 +17,7 @@ OPNAMES = {NOP: "NOP", HALT: "HALT", LI: "LI", ADDI: "ADDI", LOOP: "LOOP", BAR: 
            WAITW: "WAITW",
            LD: "LD", ST: "ST", DSTEP: "DSTEP", STREAM: "STREAM", LDA: "LDA", MM: "MM",
            QACT: "QACT",
-           QST: "QST", HMM: "HMM", HCVT: "HCVT", VOP: "VOP", GATHER: "GATHER"}
+           QST: "QST", HMM: "HMM", HCVT: "HCVT", HDQ: "HDQ", VOP: "VOP", GATHER: "GATHER"}
 
 # MM / QACT / QST flags
 F_UNIT, F_ACC, F_RMAX, F_ASCALE = 0x1, 0x2, 0x4, 0x8     # MM
@@ -522,6 +523,12 @@ def hcvt(dst, src, n, unpack=False, ra=0, rb=0, comment=""):
     """Contiguous TMEM FP32 <-> packed binary16, no overlap; odd pack pads high half with 0."""
     _check(0 <= int(n) <= 65535, "HCVT: count must fit 16 bits")
     return Instr(HCVT, ra=ra, rb=rb, flags=int(bool(unpack)), w=_w(dst, src, n), comment=comment)
+
+
+def hdq(dst, src, scales, n, ra=0, rb=0, rc=0, comment=""):
+    """TMEM packed signed INT4 and per-element half scales -> packed binary16."""
+    _check(0 <= int(n) <= 65535, "HDQ: count must fit 16 bits")
+    return Instr(HDQ, ra=ra, rb=rb, rc=rc, w=_w(dst, src, scales, n), comment=comment)
 
 
 def mm(sa, ssa, out, n, kb, rs, ors, m, ab, srs, unit=False, acc=False, rmax=False,
