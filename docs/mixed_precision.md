@@ -102,6 +102,20 @@ FP16 invocation keeps its existing cache ABI and ignores OTPU_PRECISIONS.
 `tools/fp16_model_check.py` accepts the same precision arguments and checks each
 layer residual, persistent state and logits against the selected numerical
 oracle, then reports differences against the independent FP32 reference.
+For example, after loading a matching `v80:mixed` image:
+
+```bash
+export OTPU_TARGET=v80:mixed
+otpu-diag --dev qdma:BDF@Q --only isa,system --json diag.json
+PYTHONPATH=. python tools/fp16_model_check.py /path/to/Qwen3.5-0.8B \
+  --backend board --dev qdma:BDF@Q --precision w16a16 \
+  --precisions 'mlp=w4a16,attn=w8a8' --head-precision w16a16 \
+  --output mixed-board.json
+```
+
+The model report's `step_wall_s` includes host work and device execution;
+`device_s` derives from measured cycles and the card's reported clock. ISA runs
+have no measured hardware clock and report `device_s: null`.
 
 1. Numerical oracle and rules: exhaustive decoding of every half scale encoding
    with all 16 codes, independent rounding/packing checks, short groups, odd N/K,
@@ -138,7 +152,7 @@ vivado -mode batch -source rtl/exp/fp16/ooc.tcl \
 The full `v80:mixed` build and real-model checks use a separate build tree. The
 qualified `feat/fp16` artifacts and original V80 flash are retained.
 
-The implementation tests pass at runtime revision `04e49dd5`: 67 mixed-precision
+The implementation tests pass through test revision `b12bba4c`: 67 mixed-precision
 numerical/compiler/model/RTL tests, plus two native-memory odd-shape/group-tail
 checks and one legacy-scoreboard RTL check, plus 221 host/QDMA/target/build-flow tests. The
 latter suite skips one unrelated LFM2.5 test because its checkpoint is absent.
@@ -146,3 +160,40 @@ The native-memory model test includes independent read/write backpressure,
 consecutive tokens and reset/replay; the HDQ unit additionally sweeps 100 cancel
 offsets for each of N=2 and N=8. Full-model FP16 ISA/RTL regressions also pass.
 These results do not replace the pending physical-board qualification.
+
+The complete `v80:mixed` implementation at hardware revision `0c31d07d`
+passes the project route gate on 2026-11-15: WNS +0.444 ns, WHS +0.010 ns,
+WPWS 0.000 ns, and worst bus-skew slack +9.197 ns across 84 reported paths.
+There are no DRC errors or critical warnings. Core/TMEM clocks remain 100/200 MHz.
+Routed use is 220,805 LUTs, 196,628 FFs, 1,040 RAMB36 plus 40 RAMB18
+(1,060 BRAM36 equivalents), 1,356 DSPs and no URAM. Relative to the qualified
+FP16 implementation, this adds eight DSPs and leaves BRAM use unchanged.
+Export review, independent constraint audit and physical-board qualification
+are separate gates.
+
+## Quantization quality checks
+
+The Qwen3.5-0.8B checks use fixed input tokens `[198, 17]`, including all 24 layer
+residuals, recurrent states and final logits. Uniform W8A8, uniform W4A16 and
+`w16a16` with `mlp=w4a16,attn=w8a8` and a W16A16 head each match their staged
+numerical reference exactly in the ISA simulator for both steps.
+
+That arithmetic agreement does not remove quantization error. Uniform W4A16
+has logit cosine similarity 0.7840/0.9323 against the independent FP32 reference;
+uniform W8A8 has 0.9953/0.9989. The mixed policies below were separately compared
+with Hugging Face FP32 (`Qwen3_5ForCausalLM`, Transformers 5.22.2, PyTorch 2.15.0).
+Each has a W16A16 head; image sizes include the staged model's state at capacity 8.
+
+| Base mode and overrides | Image bytes | HF logit cosine, steps 0/1 | KL(HF || policy), steps 0/1 |
+| --- | ---: | --- | --- |
+| W16A16; `mlp=w4a16,attn=w8a8` | 1,092,804,096 | 0.8402 / 0.9734 | 1.0894 / 0.0316 |
+| W8A8; `gateup=w4a16` | 949,108,736 | 0.9843 / 0.9904 | 0.1354 / 0.0051 |
+| W8A8; `gateup=w4a16,delta=w16a16` | 1,136,267,264 | 0.9838 / 0.9901 | 0.1235 / 0.0038 |
+
+All three mixed policies retain the HF greedy token for these two positions.
+Two positions are insufficient to recommend a policy or establish corpus-level
+accuracy. In this model, retaining the large vocabulary head in W16A16 can also
+make a mixed image larger than uniform W8A8. The original automatic/INT8 default
+is retained; full W4A16 is an explicit experimental choice with visible quality
+loss. Assess a representative prompt/task corpus before selecting a deployment
+policy, and measure throughput independently of the packed weight size.
