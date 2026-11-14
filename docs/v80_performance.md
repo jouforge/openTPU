@@ -179,3 +179,42 @@ output hash. These are whole-program simulation cycles, not measured board
 speedups. Evidence: `build/perf_v80/baseline-rtl-final.json` and
 `build/perf_v80/candidate-rtl.json`. The unchanged dot-product feedback interval
 and the separate W4 decode work limit the gain from activation reuse alone.
+
+## Combined candidate: overlap multiplication and accumulation
+
+`otpu_hdot` now selects the FP32 accumulator when the product reaches the adder,
+instead of delaying an earlier accumulator value through the multiplier pipe.
+The next multiplication can run while the preceding addition completes. Every
+sum still commits before the next product enters its adder, so increasing K
+order, rounding and the first-result latency are unchanged. The acceptance
+interval becomes `LA + 1`, five clocks at the defaults, instead of
+`LM + LA + 1`, seven clocks. Captured seeds and pipelined first/last tags preserve
+input gaps, held outputs and reset cancellation with overlapping beats.
+
+This is the current candidate, including the activation reuse above. The same
+isolated HMXU flow passes at 10 ns with WNS **+3.748 ns**, WHS **+0.038 ns**,
+10,741 LUT, 5,041 FF, 16 DSP and no BRAM/URAM. Against activation reuse alone,
+it trades 214 more LUT for 178 fewer FF and a shorter arithmetic feedback wait.
+Against the original mixed baseline, the combined cost is +845 LUT and -160 FF,
+with the same DSP/RAM counts. These remain component-level measurements.
+
+| M,N,K | Mode | Original baseline cycles | Combined cycles | Cycle reduction |
+|---|---|---:|---:|---:|
+| 1,128,128 | W16A16 | 24,273 | 16,593 | 31.64% |
+| 1,128,128 | W8A8 | 252 | 252 | 0% |
+| 1,128,128 | W4A16 | 39,960 | 32,276 | 19.23% |
+| 4,128,128 | W16A16 | 96,933 | 66,165 | 31.74% |
+| 4,128,128 | W8A8 | 940 | 940 | 0% |
+| 4,128,128 | W4A16 | 159,820 | 129,102 | 19.22% |
+
+All six native AXI RTL projection results remain bit-exact, with unchanged
+programs and output hashes. `tb_hdot` also checks the new acceptance interval
+and cancellation with two accepted beats in flight, for multiple lane counts
+and multiplier/adder latencies. The instruction/kernel/model regressions and
+full V80 implementation are separate gates; no new physical-board speedup is
+claimed here.
+
+Evidence: `build/perf_v80/pipeline-rtl.json`, `pipeline/hdot-overlap.log` and
+`pipeline-ooc/`. RTL/runtime source hashes in the isolated benchmark match the
+main checkout. The matching OOC sources/reports/checkpoints are retained on
+qfpga0 under `pipeline-src/` and `pipeline-ooc/` in the performance build root.

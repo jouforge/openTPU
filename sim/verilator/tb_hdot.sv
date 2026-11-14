@@ -27,6 +27,23 @@ module tb_hdot
 
   initial begin
     tick(); @(negedge clk); rst = 1'b0;
+    // The next multiplication may start before the preceding sum commits.
+    // Check the feedback interval and cancel with two accepted beats in flight.
+    for (int pos = 0; pos <= LAT + 2; pos++) begin
+      @(negedge clk);
+      in_valid = 1'b1; first = 1'b1; last = 1'b0; a = 16'h3C00;
+      for (int j = 0; j < N; j++) begin b[j] = 16'h3C00; seed[j] = F_ZERO; end
+      tick(); @(negedge clk); in_valid = 1'b0;
+      repeat (LA - 1) begin tick(); check({31'd0, in_ready}, F_ZERO); end
+      tick(); check({31'd0, in_ready}, 32'd1);
+      @(negedge clk); in_valid = 1'b1; first = 1'b0; last = 1'b1;
+      tick(); @(negedge clk); in_valid = 1'b0;
+      repeat (pos) tick();
+      @(negedge clk); rst = 1'b1; tick();
+      check({31'd0, out_valid}, F_ZERO);
+      @(negedge clk); rst = 1'b0;
+      repeat (LAT + 2) begin tick(); check({31'd0, out_valid}, F_ZERO); end
+    end
     // Cancel an unfinished row or a final beat at every point, including a
     // completed result held by out_ready=0. A fresh first must work after reset.
     for (int final_ = 0; final_ < 2; final_++)
