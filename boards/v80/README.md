@@ -81,6 +81,11 @@ make -C boards/v80 impl PYTHON=/path/to/python
 make -C boards/v80 pdi PYTHON=/path/to/python
 ```
 
+For the qualified native FP16 variant, export `TARGET=v80:fp16` before these build
+commands and use a fresh `OUT_DIR`. Select `OTPU_TARGET=v80:fp16` and `--wformat fp16`
+for model execution. See the [FP16 qualification](../../docs/fp16.md) for its image,
+full-model checks and performance limits. The default target remains `v80`.
+
 Python needs NumPy to load the existing target module. The runner also needs Bash and
 `flock`. `OUT_DIR` defaults to `build/vivado_v80/platform`; select a fresh directory for a
 new project or changed inputs. The manifest records the target, CFG_HASH, actual revisions,
