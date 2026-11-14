@@ -5,6 +5,7 @@
 package otpu_fp;
 
   typedef logic [31:0] f32_t;
+  typedef logic [15:0] f16_t;
 
   localparam f32_t F_ZERO  = 32'h0000_0000;
   localparam f32_t F_ONE   = 32'h3F80_0000;
@@ -76,6 +77,85 @@ package otpu_fp;
     if (x[31:30] == 0) begin n[1] = 1'b1; x = x << 2; end
     if (x[31] == 0)    begin n[0] = 1'b1; end
     return {1'b0, n};
+  endfunction
+
+  // Binary16 conversions (docs/fp16.md). Half subnormals widen to normal fp32 values;
+  // narrowing keeps gradual underflow, RNE, signed zeros/infinities and a canonical NaN.
+  function automatic f32_t h2f(input f16_t a);
+    logic [31:0] sig;
+    logic [5:0] n;
+    logic [7:0] e;
+    if (a[14:10] == 5'd31)
+      return a[9:0] == 0 ? {a[15], 8'hFF, 23'd0} : F_NAN;
+    if (a[14:10] != 0)
+      return {a[15], 8'(a[14:10] + 8'd112), a[9:0], 13'd0};
+    if (a[9:0] == 0) return {a[15], 31'd0};
+    n = lzc32({22'd0, a[9:0]});
+    sig = {22'd0, a[9:0]} << (n - 6'd8);
+    e = 8'd134 - 8'(n);
+    return {a[15], e, sig[22:0]};
+  endfunction
+
+  function automatic f16_t f2h(input f32_t a);
+    logic [7:0] e;
+    logic [31:0] sig, q, remn, half;
+    logic [4:0] sh;
+    e = a[30:23];
+    if (e == 8'hFF && a[22:0] != 0) return 16'h7E00;
+    if (e >= 8'd143) return {a[31], 5'd31, 10'd0};
+    if (e < 8'd102) return {a[31], 15'd0};
+    if (e >= 8'd113) begin
+      q = ({1'b0, a[30:0]} + 32'h0000_0FFF + 32'(a[13])) >> 13;
+      q = q - 32'h0001_C000;
+    end else begin
+      sh = 5'(8'd126 - e);                 // 14..24: subnormal, or a carry to 0x0400
+      sig = {8'd0, 1'b1, a[22:0]};
+      half = 32'd1 << (sh - 5'd1);
+      remn = sig & ((32'd1 << sh) - 32'd1);
+      q = sig >> sh;
+      q = q + 32'((remn > half) || ((remn == half) && q[0]));
+    end
+    return {a[31], q[14:0]};
+  endfunction
+
+  // A finite binary16 product has at most 22 significant bits and exponent -48..31:
+  // it is exact and normal in fp32. Multiply the two 11-bit significands before
+  // normalization, without expanding them into the fp32 multiplier's 24-bit operands.
+  typedef struct packed {
+    logic        sign, nan, inf, zero;
+    logic [5:0]  exp_sum;
+    logic [21:0] prod;
+  } hmul_mid_t;
+
+  function automatic hmul_mid_t fp_hmul_s1(input f16_t a, input f16_t b);
+    hmul_mid_t r;
+    logic az, bz, ai, bi;
+    logic [10:0] am, bm;
+    az = a[14:0] == 0; bz = b[14:0] == 0;
+    ai = a[14:0] == 15'h7C00; bi = b[14:0] == 15'h7C00;
+    r.sign = a[15] ^ b[15];
+    r.nan = (a[14:10] == 31 && a[9:0] != 0) || (b[14:10] == 31 && b[9:0] != 0) ||
+            (ai && bz) || (bi && az);
+    r.inf = ai || bi;
+    r.zero = az || bz;
+    r.exp_sum = (a[14:10] == 0 ? 6'd1 : {1'b0, a[14:10]}) +
+                (b[14:10] == 0 ? 6'd1 : {1'b0, b[14:10]});
+    am = {a[14:10] != 0, a[9:0]}; bm = {b[14:10] != 0, b[9:0]};
+    r.prod = am * bm;
+    return r;
+  endfunction
+
+  function automatic f32_t fp_hmul_s2(input hmul_mid_t r);
+    logic [5:0] n;
+    logic [7:0] e;
+    logic [31:0] sig;
+    if (r.nan) return F_NAN;
+    if (r.inf) return {r.sign, 8'hFF, 23'd0};
+    if (r.zero) return {r.sign, 31'd0};
+    n = lzc32({10'd0, r.prod});
+    e = 8'(r.exp_sum) + 8'd108 - 8'(n);
+    sig = {10'd0, r.prod} << (n - 6'd8);
+    return {r.sign, e, sig[22:0]};
   endfunction
 
   // Normalize while counting: the shift stages of the leading-zero search are the normalize
