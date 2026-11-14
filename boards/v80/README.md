@@ -222,6 +222,49 @@ existing openTPU exclusive device lock. `otpu-smi` opens only the register BAR a
 SNAP writes to latch counters; it does not open the DMA queue. Host/core streaming is disabled pending concurrency qualification; automatic
 QDMA device discovery, queue creation and driver setup are not implemented.
 
+## Run Qwen3.5 with caches
+
+With the overlay loaded, its queue provisioned, and the Python environment activated,
+run from the repository root. Set `MODEL` to a local Qwen3.5-0.8B checkpoint and
+`OTPU_DEV` to the provisioned PF1/queue. Use a writable cache directory on a disk with
+enough free space; the existing caches enforce their own free-space floors.
+
+```sh
+export OTPU_TARGET=v80
+export OTPU_DEV=qdma:0000:41:00.1@4
+export MODEL=/absolute/path/to/Qwen3.5-0.8B
+export OMP_NUM_THREADS=8
+export MKL_NUM_THREADS=8
+export OTPU_IMAGE_CACHE="$PWD/build/vivado_v80/cache/mxu"
+export OTPU_IMG_CACHE="$PWD/build/vivado_v80/cache/img"
+export OTPU_PROG_CACHE="$PWD/build/vivado_v80/cache/prog"
+mkdir -p "$OTPU_IMAGE_CACHE" "$OTPU_IMG_CACHE" "$OTPU_PROG_CACHE"
+
+otpu-smi --dev "$OTPU_DEV"
+otpu-chat --model "$MODEL" --backend board --dev "$OTPU_DEV" \
+  --wformat int8 --max-new 256 --plain
+```
+
+`OTPU_IMAGE_CACHE` caches quantized matrices where supported, `OTPU_IMG_CACHE` caches
+the complete model memory image, and `OTPU_PROG_CACHE` caches device programs, prefill
+fit results and instruction wait tables. Explicit paths also work on a host without
+the default `~/otpu-build` directory. Keep the exports in the shell used to launch
+each process. The caches are local runtime outputs, separate from build input records.
+
+The first run builds missing entries. Later loads should report `read from the image
+cache`; programs are reused when their keys match. Changed model layouts, source,
+formats or newly reached context buckets can require more preparation. Cache reuse
+does not eliminate loading the model onto the card.
+
+To compare runs, ask a short question, enter `/reset`, and ask the same question again.
+Then exit with an empty line or Ctrl-D, restart the same command, and repeat. Record
+loading time, TTFT and both wall/device token rates; a cold reply's average decode rate
+includes any program preparation after its first token. For an automated single prompt,
+append `--max-new 64 --seed 42 --prompt "请用中文介绍一下你自己。"`.
+The [measured cold/warm comparison](../../docs/v80.md#chat-performance-and-caches--2026-11-14)
+records this workload's results and timing scope. Stop the chat before running diagnostics
+that execute programs or overwrite model memory.
+
 ## Source layout and outputs
 
 Implemented board sources:
