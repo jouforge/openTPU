@@ -102,3 +102,19 @@ def test_w8_reference_windows(D):
     comp, imgs = compile_kernel(projection, cfg, x=Input(x), w=Weight(w), out=Output((3, 13)))
     np.testing.assert_array_equal(F.bits(run(comp, imgs).outputs["out"]),
                                   F.bits(reference(x, w, "w8a8", D=D)))
+
+
+@pytest.mark.parametrize("shape,group", [((2, 19, 17), 8), ((1, 9, 131), 128)])
+def test_w4_unaligned_native_rtl(have_verilator, tmp_path, shape, group):
+    from opentpu import target
+    m, n, k = shape
+    rng = np.random.default_rng(85)
+    a = rng.normal(size=(m, k)).astype(np.float32)
+    w = rng.normal(size=(n, k)).astype(np.float32) / 8
+    cfg = target.config("v80:mixed", TMEM_WORDS=16384, IMEM_WORDS=32768,
+                        DRAM_BYTES=1 << 20, ACT_BLOCKS=4)
+    comp, imgs = compile_kernel(projection, cfg, x=Input(a), w=Int4Weight(w, group=group), out=Output((m, n)))
+    dram, tmem, stats = rtlsim.run(cfg, comp.programs, imgs, keep=tmp_path,
+        uarch=target.sim_uarch("v80:mixed") | {"AW": cfg.AW}, axi=True, stall=29, max_cycles=1000000)
+    np.testing.assert_array_equal(F.bits(collect(comp, dram, tmem, stats).outputs["out"]),
+                                  F.bits(Q4.matmul(a, Q4.quantize(w, group))))
