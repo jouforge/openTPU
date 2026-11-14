@@ -86,6 +86,13 @@ commands and use a fresh `OUT_DIR`. Select `OTPU_TARGET=v80:fp16` and `--wformat
 for model execution. See the [FP16 qualification](../../docs/fp16.md) for its image,
 full-model checks and performance limits. The default target remains `v80`.
 
+For explicit W16A16/W8A8/W4A16 selection, build the qualified `TARGET=v80:mixed`
+variant in another fresh `OUT_DIR`. Select `OTPU_TARGET=v80:mixed` and use the
+`--precision`/`--precisions` interface described in the
+[mixed-precision qualification](../../docs/mixed_precision.md). This variant adds
+packed INT4 tile decoding; its quality and performance depend on the selected
+policy. The default `v80` and `v80:fp16` variants retain their existing identities.
+
 Python needs NumPy to load the existing target module. The runner also needs Bash and
 `flock`. `OUT_DIR` defaults to `build/vivado_v80/platform`; select a fresh directory for a
 new project or changed inputs. The manifest records the target, CFG_HASH, actual revisions,

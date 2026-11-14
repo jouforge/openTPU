@@ -66,7 +66,8 @@ policy = Policy(24, mode="w16a16",
 
 Explicit rules override `OTPU_PRECISIONS`; an explicit empty string disables it.
 `OTPU_FORMATS` and existing `--wformat int4/fp4/nvfp4/mix` retain their current
-meaning. No new mixed policy is recommended automatically before quality checks.
+meaning. No mixed policy is selected automatically; deployment choices need
+workload-specific quality checks.
 W4A16 reduces weight storage but adds device decode work and still uses HMM;
 it is not a promise of higher throughput. Measure device cycles separately from
 program compilation, image loading and the staged host launch overhead.
@@ -77,9 +78,9 @@ an identity while different operator choices do not alias.
 
 The numerical contract, HDQ instruction, compiler/runtime placement, kernels and
 staged model dispatch are implemented. `v80:mixed` enables FP16 and W4A16;
-`v80:fp16` retains its qualified architecture hash. The new variant is **not yet
-board-qualified**. Keep the qualified FP16 image until its replacement passes
-route and deployment checks.
+`v80:fp16` retains its qualified architecture hash. The new variant is
+**board-qualified on 2026-11-15**, including complete Qwen3.5-0.8B checks and
+explicit mixed-policy execution. The qualified FP16 artifacts remain available.
 
 The explicit chat interface is:
 
@@ -159,7 +160,7 @@ latter suite skips one unrelated LFM2.5 test because its checkpoint is absent.
 The native-memory model test includes independent read/write backpressure,
 consecutive tokens and reset/replay; the HDQ unit additionally sweeps 100 cancel
 offsets for each of N=2 and N=8. Full-model FP16 ISA/RTL regressions also pass.
-These results do not replace the pending physical-board qualification.
+These software checks supplement the physical-board qualification below.
 
 The complete `v80:mixed` implementation at hardware revision `0c31d07d`
 passes the project route gate on 2026-11-15: WNS +0.444 ns, WHS +0.010 ns,
@@ -197,3 +198,131 @@ make a mixed image larger than uniform W8A8. The original automatic/INT8 default
 is retained; full W4A16 is an explicit experimental choice with visible quality
 loss. Assess a representative prompt/task corpus before selecting a deployment
 policy, and measure throughput independently of the packed weight size.
+
+## V80 deployment and validation (2026-11-15)
+
+The complete build uses frozen hardware revision `0c31d07d`, target `v80:mixed`
+and CFG_HASH `154f92b2`. Board/model checks use runtime `edaa60bf`; subsequent
+test/documentation commits preserve all 53 recorded hardware inputs. Vivado and
+Vitis are 2026.1.1, AMR is `c21a01b618be35511b2d88a8946bd8859639c713`, and
+`amr_vivado_designs` is `4b7d244758c683ec4c45f357e65511c25cff8f38`.
+Use the existing [V80 build flow](../boards/v80/README.md#platform-flow) with
+`TARGET=v80:mixed` and a fresh `OUT_DIR`. Local Tcl and the input manifest are
+generated as before; no dependency lock file is introduced.
+
+Independent review passed XSA CRCs, embedded/standalone PDI hash agreement,
+NoC files and BIF references. The routed constraint audit passed all 24 scoped
+RAM exceptions and 16 read-FIFO Gray groups, including actual fan-in coverage.
+The AMC firmware was built from this XSA and loaded with the PL by volatile JTAG
+on qfpga0. The loaded card reports build `0c31d07d`, FP16 and W4A16 capabilities,
+100 MHz, and the expected target geometry. AMC is READY and QDMA queue 4 is online.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `otpu_v80.xsa` | 26,520,217 | `901f8b97d99d4ac41a0e7c343f447342ebb26c6cd6c1ac4cd3920881d9919654` |
+| `otpu_v80_pld.pdi` | 18,011,904 | `3d766daa8f5d33e34ea0026842022147437cc76e2c57ada804b25a11f92f7354` |
+| `otpu_v80_amc_boot.pdi` | 4,095,568 | `ada8ca64aac9d0823382b85080a1675f79bb5fda7a7cccd85682e0ccd8812015` |
+
+Physical checks passed seven register tests, 49 memory tests, 105 ISA tests and
+five system tests. Memory testing includes March C- over all eight 4 GiB channels
+(32 GiB total), with no bad bytes. ISA checks include all three FP16 cases and
+two HDQ signed-code/half-scale cases, including odd output counts. The system
+soak ran 20 iterations. HDQ was interrupted at four delays from 0.1 to 7 ms;
+every cancellation was followed by exact FP16/HDQ recovery.
+
+The unchanged legacy INT8 path passed eight prompts and 128 generated steps
+against the retained ISA baseline: identical tokens and bit-exact logits,
+maximum error 0 ULP. Separately, all five staged policies below passed both
+fixed input tokens `[198,17]` at capacity 8, including every layer residual,
+all recurrent/KV state, finite full logits and recorded logit hashes:
+
+- uniform W16A16, W8A8 and W4A16;
+- W16A16 with `mlp=w4a16,attn=w8a8` and a W16A16 head;
+- W8A8 with `gateup=w4a16` and a W16A16 head.
+
+W8A8, W4A16 and the first mixed policy also reproduce the full ISA-run hashes;
+W16A16 reproduces the independently retained FP16 reference, and both mixed
+policies reproduce the independent quality-check reference arrays. Numerical
+agreement is separate from the quality limitations above.
+
+The physical/model checks, fixed-token performance records, CLI conversation and
+final management/FPT audit have passed. After testing, AMC remained READY,
+both PCI functions retained the established Gen4 x8 link, the data function used
+`qdma-pf`, and queue 4 remained online in both directions. The final card status
+was idle/calibrated without ERROR, AXI_ERR, ECC_DED or WAIT timeout. Original
+Flash/FPT contents were unchanged; deployment used volatile JTAG only.
+The diagnostic CLI skips its XDMA-only PCIe checks on QDMA; PCIe/driver health
+was checked independently through sysfs. Temperature and power were not measured.
+
+### Loading and execution baseline
+
+Each policy was loaded at capacity 2048 first with a fresh image-cache directory
+and then with a verified cache hit. Cold here means image-cache miss; the
+checkpoint's operating-system file cache was not flushed. Loads include checkpoint
+loading, image construction/cache access and board initialization/upload. These
+are individual measurements, not repeated-trial distributions.
+
+For step timing, capacity is 8. Each engine first executes `[198,17]`, resets,
+then repeats those tokens with its in-process programs warm. The table reports
+the second measured position. Both outputs reproduce their qualification hashes,
+and monitoring reports the whole model's cycle count and correct KV usage;
+the status file is removed on close. Device time is cycles / 100 MHz.
+
+| Policy | Image bytes (cap 2048) | Cold / warm load (s) | Device / step (s) | Wall / step (s) |
+| --- | ---: | --- | ---: | ---: |
+| W16A16 | 1,553,745,920 | 31.97 / 1.37 | 13.0215 | 13.3939 |
+| W8A8 | 810,366,976 | 10.55 / 1.52 | 0.1043 | 0.2569 |
+| W4A16 | 437,652,480 | 8.64 / 1.11 | 18.3582 | 18.8665 |
+| W16A16; MLP W4A16, attention W8A8, head W16A16 | 1,117,964,544 | 30.34 / 1.69 | 14.1494 | 14.5508 |
+| W8A8; gate/up W4A16, head W16A16 | 974,274,560 | 29.31 / 1.33 | 8.7482 | 8.9995 |
+
+Cold image construction/cache writing takes 8.32–29.50 s in these measurements;
+board initialization/upload takes 0.21–1.07 s. Image caching removes most repeated
+loading work. It does not eliminate first-use program generation or the device's
+arithmetic cost. W4A16 reduces image size but is slower than W16A16 in this first
+implementation because it adds tile decoding to the existing HMM path. These
+fixed-token results do not measure long-context or batched throughput.
+
+All rows use the explicit staged engine and its FP16 KV/attention boundaries.
+The W8A8 row is not the unchanged legacy `--wformat int8` engine's benchmark.
+There is no automatic selection of one of these policies; the quality tradeoffs
+above must be assessed independently of memory size and speed.
+
+### Chat and retained evidence
+
+The capacity-2048 CLI run used W8A8 with `gateup=w4a16`, a W16A16 head, greedy
+selection, and the prompt `用一句话介绍自己。`. It loaded in 32.1 s with a fresh
+image cache (28.3 s building/caching), then took 268.41 s to the first token with
+a cold program cache and 17 prefill tokens. It generated 16 tokens before the
+requested `max_new` limit, producing:
+
+> 我是一个人工智能助手，擅长通过逻辑推理、代码编写、数据分析及创意写作
+
+This is a bounded CLI smoke test, not a complete-answer or accuracy benchmark.
+The CLI reports 0.10 wall tok/s during decode and 875.68 Mcycles/token at 100 MHz
+(about 8.76 device seconds/token); its one-decimal device-rate display rounds to
+0.1 tok/s. TTFT excludes model loading and includes first-use program generation
+and sequential prefill. It is separate from the warm capacity-8 table above.
+
+On the already programmed qfpga0, the retained test entry point is:
+
+```bash
+~/workspace/openTPU-mixed-build/full-v1/run-chat.sh \
+  --precision w8a8 --precisions 'gateup=w4a16' --head-precision w16a16 \
+  --greedy --prompt '用一句话介绍自己。' --max-new 16
+```
+
+The wrapper selects the final runtime, `OTPU_TARGET=v80:mixed`, QDMA queue 4
+and persistent image/program caches. Without precision arguments it retains the
+existing automatic/INT8 chat path. Explicit mixed execution remains a functional
+baseline; arithmetic/memory parallelism, program preparation, clocks and scaling
+remain work for `perf/v80`.
+
+Evidence is retained on qfpga0 under
+`/home/pqq/workspace/openTPU-mixed-build/full-v1/board-qualification/20261115_014903/`,
+with local copies under `build/mixed_precision/full-v1/`. The matching `deploy/`
+contains `QUALIFIED.json`, artifact hashes, the input manifest, route audit and
+XSA/PL/AMC images. `ACCEPTED.json` records the earlier implementation-only gate;
+`QUALIFIED.json` closes the board/model/cache/health gates and records their exact
+runtime revision and evidence hashes. Later documentation/test-only commits do
+not replace this qualification provenance.

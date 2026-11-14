@@ -146,8 +146,9 @@ model and board qualification are recorded in [FP16 computation](fp16.md).
 
 `v80:mixed` adds packed signed INT4 decode (`W4A16 = true`, CAPS2 bit27;
 CFG_HASH `154f92b2`) for explicit W16A16/W8A8/W4A16 matrix selection. Its software,
-RTL and component timing checks have passed; whole-board qualification is still
-pending. See [mixed matrix precision](mixed_precision.md). The default `v80`
+RTL, full implementation and Qwen3.5-0.8B board qualification passed on 2026-11-15.
+See [mixed matrix precision](mixed_precision.md) for numerical boundaries,
+quality limitations and measured performance. The default `v80`
 and qualified `v80:fp16` architectures remain unchanged.
 
 ## Limits
