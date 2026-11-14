@@ -55,6 +55,20 @@ def test_tiled_native_memory(have_verilator, tmp_path):
     np.testing.assert_array_equal(F.bits(collect(comp, dram, tmem, stats).outputs["out"]), want)
 
 
+def test_model_tile_native_memory(have_verilator, tmp_path):
+    # The full model's 8K-word weight tile, repeated M/N/K iterations and odd
+    # tails. Compare to both the ordered oracle and the smaller tile schedule.
+    cfg = target.config("v80:fp16", TMEM_WORDS=16384, IMEM_WORDS=32768,
+                        DRAM_BYTES=1 << 20, ACT_BLOCKS=4)
+    comp, imgs, want = fixture(3, 257, 259, cfg=cfg, block=(1, 128, 128))
+    small, initial, _ = fixture(3, 257, 259, cfg=cfg)
+    np.testing.assert_array_equal(F.bits(run(small, initial).outputs["out"]), want)
+    dram, tmem, stats = rtlsim.run(cfg, comp.programs, imgs, keep=tmp_path, axi=True,
+                                  stall=37, seed=23, max_cycles=5000000,
+                                  uarch=target.sim_uarch("v80:fp16") | {"AW": cfg.AW})
+    np.testing.assert_array_equal(F.bits(collect(comp, dram, tmem, stats).outputs["out"]), want)
+
+
 @pytest.mark.parametrize("shard", [None, 0])
 def test_half_weight_placement_and_sharding(shard):
     @ol.jit

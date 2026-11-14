@@ -43,7 +43,14 @@ class HalfInput:
             raise ValueError("HalfInput must be a nonempty 1-D or 2-D array")
         self.shape = a.shape
         self.array = np.zeros((*a.shape[:-1], (a.shape[-1] + 1) // 2 * 2), dtype="<u2")
-        self.array[..., :a.shape[-1]] = H.pack(a)
+        if a.ndim == 1:
+            self.array[:a.shape[-1]] = H.pack(a)
+        else:
+            # H.pack has several word-sized temporaries. Bound those while
+            # placing large K-major matrices such as a model's vocabulary head.
+            rows = max(1, (1 << 18) // a.shape[-1])
+            for r in range(0, len(a), rows):
+                self.array[r:r + rows, :a.shape[-1]] = H.pack(a[r:r + rows])
 
 
 class Output:
@@ -142,18 +149,24 @@ class Layout:
     params: dict = field(default_factory=dict)       # name -> (host arg, placement info)
 
 
-def place(cfg: Config, args: dict, weights_at: int | None = None) -> tuple[_Dram, Layout, list]:
+def place(cfg: Config, args: dict, weights_at: int | None = None, *,
+          initialize: bool = True) -> tuple[_Dram, Layout, list]:
     """Lay out host args in DRAM. Returns images, layout and per-slice bound kernel arguments.
     weights_at: Weight / HalfWeight allocations from that byte address on (an image's
-    weights above 4 GiB, AW > 32), the rest from 0."""
+    weights above 4 GiB, AW > 32), the rest from 0. initialize=False lays out
+    Input/HalfInput/HalfWeight/Output arguments without copying their values;
+    model image caches can compile against that layout before loading weights.
+    """
     S, D = cfg.S, cfg.D
     dram = _Dram(S, cfg.DRAM_BYTES, weights_at)
     layout = Layout()
     bound = [dict() for _ in range(S)]
     for name, a in args.items():
+        if not initialize and isinstance(a, (Weight, KVCache)):
+            raise ValueError("layout-only placement supports unquantized arguments")
         if isinstance(a, Input):
             addr = dram.alloc(a.array.nbytes)
-            for s in range(S):
+            for s in range(S if initialize else 0):
                 dram.put(s, addr, a.array)
             layout.params[name] = (a, addr)
             desc = _tensor(addr, a.array.shape, a)
@@ -163,7 +176,7 @@ def place(cfg: Config, args: dict, weights_at: int | None = None) -> tuple[_Dram
             if not cfg.FP16:
                 raise ValueError("HalfInput requires Config.FP16")
             addr = dram.alloc(a.array.nbytes)
-            for s in range(S):
+            for s in range(S if initialize else 0):
                 dram.put(s, addr, a.array)
             layout.params[name] = (a, addr)
             strides = (a.array.shape[-1], 1) if len(a.shape) == 2 else (1,)
@@ -179,7 +192,7 @@ def place(cfg: Config, args: dict, weights_at: int | None = None) -> tuple[_Dram
             nloc = n // S if a.shard == 0 else n
             stride = (nloc + 1) // 2 * 2
             addr = dram.alloc(2 * k * stride, high=True)
-            for s in range(S):
+            for s in range(S if initialize else 0):
                 part = a.array[s * nloc:(s + 1) * nloc] if a.shard == 0 else a.array
                 dram.put(s, addr, HalfInput(part.T).array)
             layout.params[name] = (a, addr)

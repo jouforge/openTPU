@@ -1045,12 +1045,12 @@ def main(argv=None):
     ap.add_argument("--seed", type=int)
     ap.add_argument("--max-new", type=int, default=1024, help="tokens per reply at most")
     ap.add_argument("--wformat", default=FM.AUTO,
-                    choices=[FM.AUTO, "int8", "fp4", "int4", "nvfp4", FM.MIX],
+                    choices=[FM.AUTO, "int8", "fp4", "int4", "nvfp4", "fp16", FM.MIX],
                     help="weight format of the layers (docs/quant.md; fp4 needs a bitstream "
                          "with 4-bit MM support): auto (default) is the model's recommended "
                          "mix of int8 and fp4 where it has one (mix, docs/formats.md), else "
-                         "int8")
-    ap.add_argument("--head-format", default=None, choices=["int8", "fp4", "int4", "nvfp4"],
+                         "int8; fp16 is native W16A16 for dense Qwen3.5 on an FP16 target")
+    ap.add_argument("--head-format", default=None, choices=["int8", "fp4", "int4", "nvfp4", "fp16"],
                     help="weight format of the LM head (default: --wformat)")
     ap.add_argument("--no-prog-cache", action="store_true",
                     help="compile the decode loop's bucket programs in every process (by "
@@ -1115,6 +1115,16 @@ def main(argv=None):
     tokenizer = load_tokenizer(path)        # (on a thread, while the model loads)
     spec = load_spec(path)
     wformat = FM.auto(spec, a.wformat)
+    if wformat == "fp16" or a.head_format == "fp16":
+        from opentpu.llm.qwen35 import Spec as Qwen35Spec
+        if wformat != "fp16" or a.head_format not in (None, "fp16"):
+            ap.error("native FP16 currently requires FP16 layers and head together")
+        if not isinstance(spec, Qwen35Spec) or spec.moe is not None or a.mtp or a.slots != 1:
+            ap.error("native FP16 supports dense Qwen3.5 text, one sequence, without MTP")
+        if a.backend not in ("isa", "board"):
+            ap.error("native FP16 chat supports --backend isa or board")
+        if a.cap <= 0 or a.cap % 2:
+            ap.error("native FP16 requires a positive even --cap")
     streams = ST.streams(spec)          # a MoE: its experts streamed (opentpu/host/streamed.py)
     if streams:
         if a.backend not in ("isa", "board") or a.per_position:
@@ -1135,12 +1145,14 @@ def main(argv=None):
                                     head_format=a.head_format)
     except ConfigMismatch as e:
         raise SystemExit(f"otpu-chat: {e}") from None
+    if wformat == "fp16" and cfg is not None and not cfg.FP16:
+        ap.error("--wformat fp16 requires a native FP16 bitstream (v80:fp16, CAPS2 bit26)")
     if a.mtp and (not hasattr(spec, "mtp") or a.per_position):
         raise SystemExit("otpu-chat: --mtp takes a Qwen3.5 model and resident decode")
     if a.slots > 1 and (getattr(spec, "moe", None) is None or not hasattr(spec, "mtp") or a.mtp
                         or a.per_position):
         raise SystemExit("otpu-chat: --slots takes a Qwen3.5 MoE model, resident, without --mtp")
-    if cfg is None and not streams and not a.mtp and not _maps_on_design(spec):
+    if cfg is None and wformat != "fp16" and not streams and not a.mtp and not _maps_on_design(spec):
         from opentpu.host.board import sim_config     # Gemma 4 (one KV head): the card's
         from opentpu.isasim import board_config
         cfg = sim_config(spec, a.cap, board_config(PAIR=True, DSTEP=True, STREAM=True),
@@ -1161,7 +1173,11 @@ def main(argv=None):
     bkw = dict(batch=a.slots, batch_area=True, snapshots=0) if a.slots > 1 else \
         dict(snapshots=SNAPSHOTS)
     try:
-        if streams:                     # the card's 4 GiB (the simulator's too: board_config)
+        if wformat == "fp16":
+            from opentpu.llm.qwen35_fp16 import Engine as Fp16Engine
+            eng = Fp16Engine(spec, load_weights(path), cap=a.cap, cfg=cfg, backend=backend,
+                             prog_cache=not a.no_prog_cache)
+        elif streams:                     # the card's 4 GiB (the simulator's too: board_config)
             from opentpu.isasim import board_config
             eng = ST.engine(path, cfg or board_config(), backend, a.cap, a.pool or ST.DEFAULT,
                             experts=a.experts, policy=a.policy, wformat=wformat,

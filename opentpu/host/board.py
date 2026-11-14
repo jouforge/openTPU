@@ -2638,7 +2638,10 @@ class BoardBackend:
         img = getattr(engine, "image", None)
         fmts = {getattr(img, "wformat", "int8"), getattr(img, "head_format", "int8")}
         caps = self.info.get("caps") or {}
-        if fmts != {"int8"} and not caps.get("w4"):
+        if "fp16" in fmts and not _fp16(self.info):
+            self.board.close()
+            raise ConfigMismatch("the model image needs native FP16 HMM / HCVT (CAPS2 bit26)")
+        if fmts.intersection({"int4", "fp4", "nvfp4"}) and not caps.get("w4"):
             self.board.close()
             raise ConfigMismatch("the model image has 4-bit weights and this bitstream's MXU "
                                  "runs int8 weights only (CAPS bit4 clear): use --wformat int8 "

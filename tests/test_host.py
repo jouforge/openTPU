@@ -204,6 +204,48 @@ def test_fp16_capability_and_config_check():
     assert device_config(supported).FP16
 
 
+def test_fp16_model_attach_does_not_require_integer_w4():
+    from types import SimpleNamespace
+    from opentpu.host.board import BoardBackend
+    be = object.__new__(BoardBackend)
+    be.info = dict(caps={"w4": False}, caps2={"fp16": True})
+    be.cfg = SimpleNamespace(PAIR=False, DSTEP=False, STREAM=False)
+    be.status = None
+    closed = []
+    be.board = SimpleNamespace(close=lambda: closed.append(True))
+    engine = SimpleNamespace(image=SimpleNamespace(wformat="fp16", head_format="fp16"))
+    be.attach(engine)
+    assert be.engine is engine and not closed
+    be.info["caps2"]["fp16"] = False
+    with pytest.raises(ConfigMismatch, match="native FP16"):
+        be.attach(engine)
+    assert closed
+
+
+def test_fp16_diagnostic_programs():
+    from opentpu import fp16 as H, fp32 as F, target
+    from opentpu.isasim import Machine
+    from opentpu.host.opchecks import diag_image, op_checks, EDGE_BITS, DATA, OUT
+    cfg = target.config("v80:fp16", DRAM_BYTES=8 << 20, TMEM_WORDS=16384)
+    image = diag_image(cfg)
+    checks = [(n, p) for g, n, p in op_checks(cfg) if g == "fp16"]
+    assert len(checks) == 3
+    assert not any(g == "fp16" for g, _, _ in op_checks(replace(cfg, FP16=False)))
+    x = image[DATA:DATA + 4096 * 4].view("<f4")
+    a, b = H.pack(x[:21].reshape(3, 7)), H.pack(x[1024:1101].reshape(7, 11))
+    seed = image[DATA + 0x2000:DATA + 0x2000 + 192].view("<f4").reshape(3, 16)
+    for name, prog in checks:
+        m = Machine(cfg, [prog], [image])
+        m.run()
+        if name.startswith("HCVT"):
+            want = H.unpack(H.pack(np.array(EDGE_BITS, np.uint32).view(np.float32)))
+        else:
+            want = seed.copy()
+            want[:, :11] = H.matmul(a, b, seed[:, :11] if name.endswith("ACC") else None)
+        got = m.slices[0].dram[OUT:OUT + want.nbytes].view("<f4").reshape(want.shape)
+        np.testing.assert_array_equal(F.bits(got), F.bits(want))
+
+
 def test_caps2_no_outer():
     """Register map 5's CAPS2 bit1 (NO_OUTER): a VPU built without VOP OUTER (otpu_board OUTER 0,
     the WG targets'). The host's Config has OUTER off (device_config; the CFG_HASH checked with it), and

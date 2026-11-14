@@ -6,7 +6,7 @@ import pytest
 
 from opentpu import fp16 as H, fp32 as F, isa as I, language as ol, rtlsim, target
 from opentpu.compiler import CompileError
-from opentpu.runtime import HalfInput, Input, Output, collect, compile_kernel, run
+from opentpu.runtime import HalfInput, HalfWeight, Input, Output, collect, compile_kernel, place, run
 from test_fp16_isa import CFG
 
 
@@ -49,6 +49,34 @@ def test_half_compiler_reference_and_storage():
     assert not raw[:, 11].any()
     assert [p.op for p in comp.programs[0]].count(I.HMM) == 2
     check(run(comp, imgs), a, want)
+
+
+def test_layout_only_placement_and_bounded_pack(monkeypatch):
+    rng = np.random.default_rng(74)
+    a = rng.normal(size=(129, 2049)).astype(np.float32)
+    original, sizes = H.pack, []
+
+    def pack(x):
+        sizes.append(x.size)
+        return original(x)
+
+    monkeypatch.setattr(H, "pack", pack)
+    half = HalfInput(a)
+    assert max(sizes) <= 1 << 18
+    np.testing.assert_array_equal(half.array[:, :2049], original(a))
+    assert not half.array[:, -1].any()
+    args = dict(x=Input(a[:2, :3]), h=half, w=HalfWeight(a[:3, :5]), out=Output((2, 3)))
+    cfg = replace(CFG, DRAM_BYTES=1 << 20)
+    filled, layout, bound = place(cfg, args)
+    sizes.clear()
+    empty, draft, views = place(cfg, args, initialize=False)
+    assert not sizes and not empty.images[0].any()
+    assert filled.next == empty.next
+    assert {n: v[1] for n, v in layout.params.items()} == {n: v[1] for n, v in draft.params.items()}
+    for name in args:
+        a, b = bound[0][name], views[0][name]
+        a, b = getattr(a, "storage", a), getattr(b, "storage", b)
+        assert (a.base.const, a.shape, a.strides, a.esize) == (b.base.const, b.shape, b.strides, b.esize)
 
 
 def test_half_compiler_rtl(have_verilator, tmp_path):

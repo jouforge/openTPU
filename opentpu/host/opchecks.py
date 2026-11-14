@@ -7,7 +7,7 @@ by checks.run_demo. The programs are self-contained on the card too, where TMEM 
 keep the previous run's contents: they only store TMEM words they wrote, and every MM reads ACT
 RAM blocks its own QACT filled.
 
-Groups (otpu-diag's diagnosis keys on them): control, dma, mxu, quant, collective, vpu,
+Groups (otpu-diag's diagnosis keys on them): control, dma, mxu, fp16, quant, collective, vpu,
 vpu-reduce, vpu-composite, vpu-edge, vpu-new (RDOT / OUTER / LOG2, which bitstreams before
 ddec900 lack), gen (RLD, VOP ARGMAX, HALT CHAIN: the decode loop's instructions, CAPS bit30;
 only with gen=True), waitw (WAITW whose condition holds, CAPS bit31; only with waitw=True);
@@ -165,6 +165,19 @@ def op_checks(cfg, gen: bool = False, waitw: bool = False,
            I.ld(DATA + 0x2000, RES, 64 + 16 * M),
            I.mm(W8, SC, RES, 16 - skip, 2, rs, 16, M, 0, srs, ra=1, rb=2, rc=3, **group),
            I.st(OUT, RES, 64 + 16 * M)))
+
+    # ---- native FP16 (only on images advertising HMM / HCVT)
+    if cfg.FP16:
+        add("fp16", "HCVT pack / unpack edge values",
+            [I.ld(EDGE, TE, NE), I.hcvt(4096, TE, NE),
+             I.hcvt(RES, 4096, NE, unpack=True), I.st(OUT, RES, NE), I.halt()])
+        packed = [I.hcvt(4096 + r * 4, r * 7, 7) for r in range(3)] + \
+                 [I.hcvt(4160 + r * 6, B + r * 11, 11) for r in range(7)]
+        for acc in (False, True):
+            add("fp16", "HMM odd K/N" + (" ACC" if acc else ""),
+                _p(*packed, I.ld(DATA + 0x2000, RES, 48),
+                   I.hmm(RES, 4096, 4160, 3, 11, 7, 4, 6, 16, acc=acc),
+                   I.st(OUT, RES, 48)))
 
     # ---- quantizer
     add("quant", "QACT ROW", _mm(cfg, qflags={"row": True}))
