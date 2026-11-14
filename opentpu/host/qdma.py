@@ -55,7 +55,7 @@ class QdmaTransport:
         if sys.byteorder != "little":
             raise RuntimeError("QDMA MMIO requires a little-endian host")
         self.dev, self.devname = f"qdma:{bdf}@{queue}", lock_name(dev)
-        self.want_target = target or "v80"
+        self.want_target = target or os.environ.get("OTPU_TARGET") or "v80"
         t = T.load(self.want_target)
         if t.platform.get("board") != "v80":
             raise ValueError("QDMA transport requires a V80 target")

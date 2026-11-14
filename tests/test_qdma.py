@@ -16,6 +16,7 @@ DEV = "qdma:0000:41:00.1@4"
 @pytest.fixture
 def trees(tmp_path, monkeypatch):
     monkeypatch.setenv("OTPU_RUN_DIR", str(tmp_path / "locks"))
+    monkeypatch.delenv("OTPU_TARGET", raising=False)
     sysfs, dev_root = tmp_path / "pci", tmp_path / "dev"
     root = sysfs / "0000:41:00.1"
     root.mkdir(parents=True)
@@ -184,13 +185,14 @@ def test_selection_identity_and_cleanup(trees, monkeypatch):
     assert called == [((DEV,), dict(dma=False, target="v80"))]
 
 
-def test_board_map_and_channel_hash(transport, monkeypatch):
+@pytest.mark.parametrize("name", ["v80", "v80:fp16"])
+def test_board_map_and_channel_hash(trees, monkeypatch, name):
     """Board's channel hashing and the transport's AMR base addition compose end to end;
     Board.info must not replace the absolute HBM base with zero-based channel addresses."""
-    t = transport
+    monkeypatch.setenv("OTPU_TARGET", name)
+    t = Q.QdmaTransport(DEV, **trees)
     mem = Memory(t, monkeypatch)
-    monkeypatch.setenv("OTPU_TARGET", "v80")
-    cfg = T.config("v80")
+    cfg = T.config(name)
     f = FakeTransport(devname=None, regmap=5, pair=False, dstep=True, stream=True,
                       seq_wc=True, chash=True, outer=False, dstep2=True, se_own=True, kt=True)
     f.cfg_words = R.cfg_words(dict(R.cfg(f.cfg_words), WG=cfg.WG, hash=T.arch_hash(cfg)))
@@ -207,6 +209,23 @@ def test_board_map_and_channel_hash(transport, monkeypatch):
         for ch, off, part in board.split(addr, a, True, 8, 128):
             base = 0x4000000000 + ch * (1 << 32) + off
             assert bytes(mem.data[base + k] for k in range(len(part))) == part.tobytes()
+
+
+@pytest.mark.parametrize("env, explicit, want", [
+    (None, None, "v80"), ("v80:fp16", None, "v80:fp16"),
+    ("v80:fp16", "v80", "v80"), ("v80", "v80:fp16", "v80:fp16"),
+])
+def test_target_selection(trees, monkeypatch, env, explicit, want):
+    if env is not None:
+        monkeypatch.setenv("OTPU_TARGET", env)
+    t = Q.QdmaTransport(DEV, dma=False, target=explicit, **trees)
+    try:
+        assert t.want_target == want
+    finally:
+        t.close()
+    monkeypatch.setenv("OTPU_TARGET", "ypcb-00338")
+    with pytest.raises(ValueError, match="V80 target"):
+        Q.QdmaTransport(DEV, dma=False, **trees)
 
 
 def test_cli_dispatch_and_missing_queue(monkeypatch, capsys):
