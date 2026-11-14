@@ -1,0 +1,98 @@
+# AMD Alveo V80: single-slice target qualified at 100/200 MHz (docs/v80.md).
+# Eight tested 4 GiB logical channels in 128-byte beats give WG 8 one row per channel.
+# The board top connects eight native/AXI4 bridges to the AMR HBM ports.
+# DSP58 cells preserve the generic numerical and pipeline contracts; primitive-model
+# equivalence is checked in sim/tech, with real-card results recorded in docs/v80.md.
+
+[target]
+name = "v80"
+kind = "fpga"
+platform_id = 8
+description = "AMD Alveo V80: initial integration, DSP58 cells; 1 slice x 8 logical HBM channels"
+
+[arch]
+S = 1
+D = 128
+MCOLS = 8
+WG = 8
+ACT_BLOCKS = 128
+ACT_ROWS = 16
+TMEM_WORDS = 131072
+IMEM_WORDS = 32768
+AW = 36                         # relative DRAM addresses; AMR's absolute base is not in the ISA
+DRAM_BYTES = 34359738368         # eight tested 4 GiB logical HBM channels
+BHW = 0                         # no BCU1525 MIG bank-half window
+LANES = 8
+PAIR = false                    # WG > 1: every MM uses groups
+DSTEP = true
+STREAM = true
+SEQ_WC = true
+OUTER = false                   # DeltaNet uses the stream engine's DSTEP
+DSTEP2 = true
+KT = true                       # MM's K tail
+ICACHE = false
+
+[uarch]
+MXU_IMPL = 2
+MXU_CL = 16
+MXU_E = 8
+VPU_CL = 2
+ULANES = 8
+TMEM_IMPL = 3
+TMEM_NSB = 2
+TMEM_RPL = true
+TMEM_TDP = true
+TMEM_GST = true
+TMEM_PMP = 1                    # board clk_wizard supplies related 100/200 MHz clocks
+TMEM_STYLE = "block"            # inferred BRAM; routed resources and tests are in docs/v80.md
+IMEM_STYLE = "block"
+IMEM_WC_STYLE = "block"
+MXU_RF_STYLE = "distributed"
+RPB = 0
+WPB = 1
+WIN = 16
+FIFO_DEPTH = 2048
+MXU_FIFO_STYLE = "block"
+MXU_QD = 4
+QUANT_R1 = true
+QUANT_PW = 2
+TRACE_DEPTH = 16384
+PQ_WIN = 1024
+CHASH = true
+NAT_APF = 8
+NAT_AD = 16
+NAT_RD = 16
+NAT_WPOST = true
+NAT_SWG = true
+NAT_FILL = false                # native writes carry byte masks
+NAT_XPOST = true
+NAT_RHB = true
+SE_R = 2
+DMA_DEPTH = 512
+
+[tech]
+family = "xilinxversal"
+part = "xcv80-lsva4737-2MHP-e-S"
+vendor = "xilinx"
+
+[platform]
+board = "v80"
+core_mhz = 100.0                # qualified core clock; related clk_f is 200 MHz
+mem = "hbm2e"
+mem_ctrl = "noc"
+hostcal = false
+channels_per_slice = 8          # logical openTPU channels, not physical HBM channel count
+channel_bytes = 4294967296
+beat_bytes = 128
+host = "pcie"
+pcie_gen = 5                    # platform capability; the inspected host negotiated Gen4 x8
+pcie_lanes = 8
+# AMR v80_base host view, and the openTPU overlay's reserved CSR window in PF1 BAR2.
+# The host and PL bridges must add mem_base to relative channel addresses.
+mem_base = 274877906944          # 0x4000000000
+user_bar = 2
+user_bar_base = 2207613190144    # 0x020200000000
+csr_offset = 1048576            # 1 MiB into BAR2; the AMR GPIO stays at 0x20000
+csr_bytes = 1048576
+# No sim_* rate/latency/refresh settings: functional simulation only until the memory path
+# has been characterized. Do not infer HBM throughput from the default native-memory model.

@@ -2589,6 +2589,34 @@ def test_dma_lock_is_reentrant_in_its_thread(tmp_path, monkeypatch):
     assert ops == [board.fcntl.LOCK_EX, board.fcntl.LOCK_UN] * 2
 
 
+@pytest.mark.parametrize("wg", [1, 2, 4, 8])
+def test_op_checks_grouped_weights(wg):
+    """The diagnostic must reach the card on GALL targets, including every MM/QACT variant."""
+    from opentpu import target as T
+    from opentpu.host.checks import OUT, PROG_AT
+    from opentpu.host.opchecks import diag_image, op_checks
+    from opentpu.isasim import Machine
+    cfg = replace(T.config("v80", DRAM_BYTES=1 << 23), WG=wg)
+    img = diag_image(cfg)
+    checks = [(n, p) for g, n, p in op_checks(cfg) if g in ("mxu", "quant")]
+    assert len(checks) == 16
+    for name, prog in checks:
+        result = Machine(cfg, [prog], [img]).run().slices[0].dram
+        assert np.any(result[OUT:PROG_AT] != img[OUT:PROG_AT]), name
+
+
+def test_memory_error_counts():
+    from opentpu.host.memtest import errors
+    want = np.arange(1024, dtype=np.uint8)
+    assert errors(want, want.copy()) == {"lanes": [0] * 8, "bits": [0] * 64, "bad_bytes": 0}
+    got = want.copy()
+    got[5] ^= 0x81
+    got[-3] ^= 0x01             # same lane, last beat
+    e = errors(got, want)
+    assert e["bad_bytes"] == 2 and e["lanes"] == [0, 0, 0, 0, 0, 2, 0, 0]
+    assert e["bits"] == [2 if k == 40 else 1 if k == 47 else 0 for k in range(64)]
+
+
 def test_op_checks_store_the_same_at_aw_36():
     """The op checks' register arithmetic is the machine's (opchecks._addi: isa.wrap at
     cfg.AW; rld_mul's negative multiplier): on an AW 36 machine (the BCU's) every check stores

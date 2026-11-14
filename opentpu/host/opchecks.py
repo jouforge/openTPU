@@ -23,8 +23,9 @@ from __future__ import annotations
 import numpy as np
 
 from opentpu import isa as I
+from opentpu import quant as Q
 
-from .checks import DATA, OUT, SC, W8, demo_image
+from .checks import DATA, OUT, SC, W8, demo_image, demo_mm
 
 EDGE = 0x80000                  # DRAM: edge-value fp32 vectors (EDGE_BITS, then reversed)
 EDGE_BITS = [                   # fp32 bit patterns
@@ -47,6 +48,16 @@ def diag_image(cfg=None) -> np.ndarray:
     check chains to, with its wait entries after it on a configuration whose sequencer takes
     them (cfg.SEQ_WC, EXPERIMENTAL: device_config's from the bitstream)."""
     img = demo_image()
+    if cfg is not None and cfg.GALL and cfg.WG > 1:
+        # Use valid grouped MX scales. Reinterpreting the demo's float bytes as dw can
+        # underflow every result and leave a test of MM comparing only zeros.
+        sw = img[SC:SC + 16 * 4].copy().view(np.float32)
+        scales = Q.pack_scales("int8", sw, np.arange(32, dtype=np.uint8).reshape(16, 2) % 4)
+        weights = img[W8:W8 + 16 * 256].reshape(16, 256)
+        weights, scales = Q.grouped(weights, scales, "int8", 256, cfg.WG, cfg.D,
+                                    at=W8 if cfg.CHASH else None)
+        img[W8:W8 + weights.size] = weights.ravel()
+        img[SC:SC + scales.size] = scales.ravel()
     e = np.array(EDGE_BITS, np.uint32)
     img[EDGE:EDGE + 4 * NE] = e.view(np.uint8)
     img[EDGE + 4 * NE:EDGE + 8 * NE] = e[::-1].copy().view(np.uint8)
@@ -84,9 +95,11 @@ def _mm(cfg, m=None, qflags=None, pre=(), ab=0, ors=16, **kw) -> list:
     """QACT m rows (2 blocks) into ACT RAM block ab, then MM over the 16 x 256 int8 weights.
     The output area is filled from DRAM first (the accumulator of ACC; the gaps of ors > 16)."""
     m = m or cfg.MCOLS
+    rs, srs, group = demo_mm(cfg)
     n = ors * m + (m if kw.get("rmax") else 0)
     return _p(I.qact(0, m, ab, 2, 256, **(qflags or {})), I.ld(DATA + 0x2000, RES, n), *pre,
-              I.mm(W8, SC, RES, 16, 2, 256, ors, m, ab, 8, **kw), I.st(OUT, RES, n))
+              I.mm(W8, SC, RES, 16, 2, rs, ors, m, ab, srs, **group, **kw),
+              I.st(OUT, RES, n))
 
 
 def _addi(aw: int):
@@ -98,6 +111,8 @@ def _addi(aw: int):
 def op_checks(cfg, gen: bool = False, waitw: bool = False,
               gather: bool = True) -> list[tuple[str, str, list]]:
     M = cfg.MCOLS
+    rs, srs, group = demo_mm(cfg)
+    skip = group.get("grp", 1)       # the register-offset check skips one weight group
     aw = getattr(cfg, "AW", 32)
     addi = _addi(aw)
     out = []
@@ -146,9 +161,9 @@ def op_checks(cfg, gen: bool = False, waitw: bool = False,
     add("mxu", "MM ACT block ab=3", _mm(cfg, ab=3))
     add("mxu", "MM output row stride ors=40", _mm(cfg, ors=40))
     add("mxu", "MM registers (ra sa, rb ssa, rc out)",
-        _p(I.qact(0, M, 0, 2, 256), I.li(1, 256), I.li(2, 8), I.li(3, 64),
+        _p(I.qact(0, M, 0, 2, 256), I.li(1, rs), I.li(2, srs), I.li(3, 64),
            I.ld(DATA + 0x2000, RES, 64 + 16 * M),
-           I.mm(W8, SC, RES, 15, 2, 256, 16, M, 0, 8, ra=1, rb=2, rc=3),
+           I.mm(W8, SC, RES, 16 - skip, 2, rs, 16, M, 0, srs, ra=1, rb=2, rc=3, **group),
            I.st(OUT, RES, 64 + 16 * M)))
 
     # ---- quantizer
@@ -156,9 +171,10 @@ def op_checks(cfg, gen: bool = False, waitw: bool = False,
     add("quant", "QACT CSCALE",
         _p(I.vop(I.V_ABS, 2048, 3072, 0, 1, 256, 256, 256, 0),
            I.qact(0, M, 0, 2, 256, cscale=2048),
-           I.mm(W8, SC, RES, 16, 2, 256, 16, M, 0, 8), I.st(OUT, RES, 16 * M)))
+           I.mm(W8, SC, RES, 16, 2, rs, 16, M, 0, srs, **group), I.st(OUT, RES, 16 * M)))
     add("quant", "QACT RSCALE",
-        _p(I.qact(0, M, 0, 2, 256, rscale=3072), I.mm(W8, SC, RES, 16, 2, 256, 16, M, 0, 8),
+        _p(I.qact(0, M, 0, 2, 256, rscale=3072),
+           I.mm(W8, SC, RES, 16, 2, rs, 16, M, 0, srs, **group),
            I.st(OUT, RES, 16 * M)))
     add("quant", "QST dense", _p(I.qst(A, OUT + 0x800, OUT + 0x1800, 2, 2, 256, 256, 1)))
     add("quant", "QST strided (es=3)",

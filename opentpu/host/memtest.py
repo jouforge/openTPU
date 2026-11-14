@@ -25,10 +25,14 @@ def errors(got: np.ndarray, want: np.ndarray) -> dict:
     """Bytes at channel offsets that are multiples of 8: counts of wrong bytes per lane and of
     flipped bits per DQ bit."""
     x = np.bitwise_xor(got, want).reshape(-1, LANES)
+    bad = int(np.count_nonzero(x))
+    # Full HBM scans compare large blocks; expand DQ bits only when a byte differs.
+    if not bad:
+        return {"lanes": [0] * LANES, "bits": [0] * (8 * LANES), "bad_bytes": 0}
     lanes = np.count_nonzero(x, axis=0)
     bits = np.unpackbits(x[:, :, None], axis=2, bitorder="little").sum(axis=0).reshape(-1)
     return {"lanes": lanes.astype(int).tolist(), "bits": bits.astype(int).tolist(),
-            "bad_bytes": int(np.count_nonzero(x))}
+            "bad_bytes": bad}
 
 
 def _merge(total: dict, e: dict) -> dict:

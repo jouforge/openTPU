@@ -554,11 +554,15 @@ def open_transport(dev: str | None = None, dma: bool = True, target: str | None 
     YPCB-00338, the BCU1525; any path, a test's too); cards in tensor parallel as
     "/dev/xdma0+/dev/xdma1" (card 0 first: opentpu.host.cards.open_cards; target: the build
     they must hold, a variant by name, bcu1525-x2:st16: check_target); None: default_dev().
+    qdma:0000:bb:dd.1@queue: the V80's PF1 with an existing bidirectional MM queue.
     dma=False: a monitor's (no DMA channel, no device lock)."""
     dev = dev or default_dev()
     if "+" in dev:
         from .cards import open_cards
         return open_cards(dev.split("+"), dma=dma, target=target)
+    if dev.startswith("qdma:"):
+        from .qdma import QdmaTransport
+        return QdmaTransport(dev, dma=dma, target=target)
     if "/" in dev:
         return XdmaTransport(dev, dma=dma)
     raise ValueError(f"no transport for {dev!r} (/dev/xdmaN or another path)")

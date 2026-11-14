@@ -87,6 +87,7 @@ module otpu_board #(
   parameter int TRACE_DEPTH = 16384,   // trace records (a power of two; 0: no trace buffer)
   parameter int TRACE_QD    = 32,      // trace capture queue (cycles with events)
   parameter int PQ_WIN      = 1024,    // cycles per P/Q counter window
+  parameter bit HAS_TEMP    = 1'b1,    // a temperature source is wired (CAPS bit1)
   parameter bit HAS_I2C     = 1'b1,    // the I2C pins are wired (CAPS bit2)
   parameter bit CHASH       = 1'b1,    // hashed channel interleave (otpu_native_dram; CAPS bit7)
   parameter bit DSTEP       = 1'b1,    // the DMA's DSTEP datapath (CAPS bit6; 0 leaves it out)
@@ -270,7 +271,7 @@ module otpu_board #(
     if (rst) begin
       temp_q <= '0;
       temp_v <= 1'b0;
-    end else if (tmp_s2 == tmp_s3 && tmp_s3 != '0) begin
+    end else if (HAS_TEMP && tmp_s2 == tmp_s3 && tmp_s3 != '0) begin
       temp_q <= tmp_s3;
       temp_v <= 1'b1;
     end
@@ -384,7 +385,7 @@ module otpu_board #(
             coll_status, coll_xerr, x2_seq} = '0;
   end
   otpu_ctrl #(.NC(NC), .D(D), .MCOLS(MCOLS), .ACT_ROWS(ACT_ROWS), .LANES(LANES), .CORE_KHZ(CORE_KHZ), .BUILD_ID(BUILD_ID),
-              .CORE_KHZ1(CORE_KHZ1), .DDR_MTS(DDR_MTS), .TRACE_DEPTH(TRACE_DEPTH), .PQ_WIN(PQ_WIN), .HAS_TEMP(1'b1),
+              .CORE_KHZ1(CORE_KHZ1), .DDR_MTS(DDR_MTS), .TRACE_DEPTH(TRACE_DEPTH), .PQ_WIN(PQ_WIN), .HAS_TEMP(HAS_TEMP),
               .HAS_I2C(HAS_I2C), .CHASH(CHASH), .DSTEP(DSTEP), .HOSTCAL(HOSTCAL),
               .COLL_GATHER(COLL_GATHER), .HAS_BMC(HAS_BMC), .BHW(BHW), .OUTER(OUTER), .PAIR(WG == 1), .DSTEP2(DSTEP2 && DSTEP),
               .KT(KT && WG > 1),

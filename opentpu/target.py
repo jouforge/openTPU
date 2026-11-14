@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TARGETS = ROOT / "targets"
 DEFAULT = "ypcb-00338"
 KINDS = ("fpga", "asic", "sim")
-FAMILIES = ("generic", "xilinx7", "xilinxus", "asic")
+FAMILIES = ("generic", "xilinx7", "xilinxus", "xilinxversal", "asic")
 # uarch keys every target names (timing only; the RTL's parameters of the same names)
 UARCH_KEYS = ("MXU_IMPL", "MXU_CL", "VPU_CL", "ULANES", "TMEM_IMPL", "RPB", "WPB", "WIN",
               "FIFO_DEPTH", "TRACE_DEPTH", "PQ_WIN", "CHASH")
@@ -151,6 +151,7 @@ CORE = ["vpu/otpu_fp.sv", "vpu/otpu_fpipe.sv", "top/otpu_pkg.sv", "mem/otpu_tmem
 TECH = {"generic": ["tech/generic/otpu_tech_dsp.sv", "tech/generic/otpu_tech_ram.sv"],
         "xilinx7": ["tech/xilinx7/otpu_tech_dsp.sv", "tech/generic/otpu_tech_ram.sv"],
         "xilinxus": ["tech/xilinxus/otpu_tech_dsp.sv", "tech/generic/otpu_tech_ram.sv"],
+        "xilinxversal": ["tech/xilinxversal/otpu_tech_dsp.sv", "tech/generic/otpu_tech_ram.sv"],
         # the RAMs on SRAM macros: the leaves (otpu_sram_*) come from tools/asic/flow.py
         "asic": ["tech/generic/otpu_tech_dsp.sv", "tech/asic/otpu_tech_ram.sv"]}
 SHELL = ["shell/otpu_ctrl.sv", "shell/otpu_trace.sv", "shell/otpu_board.sv",
@@ -172,7 +173,10 @@ BOARDS = {"ypcb-00338": ["boards/ypcb-00338/otpu_native_sys.sv",
                          "boards/bcu1525/otpu_bmc_watch.sv", "boards/bcu1525/otpu_bmc_uart.sv",
                          "boards/bcu1525/otpu_bcu_gov.sv", "boards/bcu1525/otpu_axil_off.sv",
                          "boards/bcu1525/otpu_axi_off.sv",
-                         "boards/bcu1525/otpu_fpga_top_bcu_wg.sv"]}
+                         "boards/bcu1525/otpu_fpga_top_bcu_wg.sv"],
+          "v80": ["mem/otpu_hbm_ch.sv", "boards/v80/otpu_v80_mem.sv",
+                  "boards/v80/otpu_v80_ready.sv", "boards/v80/otpu_v80_sys.sv",
+                  "boards/v80/otpu_fpga_top_v80.sv"]}
 
 
 class TargetError(ValueError):

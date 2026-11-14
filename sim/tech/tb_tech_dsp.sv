@@ -4,6 +4,7 @@
 // with rtl/tech/generic and once with a vendor family (and its DSP model); tests/test_tech.py
 // compares the two traces (xilinx7 on yosys's DSP48E1 model); xilinxus runs on the
 // unisim DSP48E2 in Vivado's simulator.
+`timescale 1ns/1ps
 module tb_tech_dsp;
   logic clk = 1'b0;
   logic en;
@@ -37,6 +38,7 @@ module tb_tech_dsp;
   endfunction
 
   initial begin
+    #200;                                      // let UNISIM's startup GSR finish before stimulus
     if (!$value$plusargs("seed=%d", seed)) seed = 1;
     for (cyc = 0; cyc < 4000; cyc++) begin
       en = (cyc < 16) ? 1'b1 : ($random(seed) % 8 != 0);
@@ -51,6 +53,21 @@ module tb_tech_dsp;
       end
       first = (cyc < 4) || ($random(seed) % 8 == 0);
       den = $random(seed);
+      // Signed extremes, maximum scales, long stalls and accumulator wraparound.
+      if (cyc >= 16 && cyc < 272) begin
+        act = cyc[0] ? 8'h80 : 8'h7f;
+        wlo = cyc[1] ? 8'h80 : 8'h7f;
+        whi = cyc[2] ? 8'h80 : 8'h7f;
+        sel = cyc[3];
+        en = (cyc % 32) < 20;
+        den = cyc[4];
+        first = cyc == 16;
+        for (int g = 0; g < 8; g++) begin
+          a[g] = cyc[5] ? 24'h800000 : 24'h7fffff;
+          d[g] = cyc[6] ? 24'h800000 : 24'h7fffff;
+          bm[g] = 17'h1ffff;
+        end
+      end
       #1 clk = 1'b1;
       #1 clk = 1'b0;
       if (cyc >= 16) begin                     // the pipelines filled with defined values

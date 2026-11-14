@@ -50,6 +50,9 @@ def run_dir() -> Path:
 
 
 def devname(dev: str) -> str:
+    if dev.startswith("qdma:"):
+        from .qdma import lock_name
+        return lock_name(dev)
     return Path(dev).name
 
 

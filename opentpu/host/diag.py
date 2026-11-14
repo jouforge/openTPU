@@ -753,14 +753,20 @@ def main(argv=None, open_transport=None) -> int:
         elif a.sim:
             t = SimTransport(ch_bytes=1 << 22)
         else:
-            t = XdmaTransport(a.dev)
+            from .board import open_transport as board_transport
+            t = board_transport(a.dev)
     except OSError as e:
-        rows = [Row("platform", "XDMA driver", FAIL, driver_state(a.dev)[1]),
-                Row("platform", "ID register", FAIL, f"cannot open {a.dev}: {e}")]
+        if a.dev.startswith("qdma:"):
+            rows = [Row("platform", "QDMA transport", FAIL, f"cannot open {a.dev}: {e}")]
+            hints = ["check the selected PF1 BDF, qdma-pf driver, started bidirectional MM "
+                     "queue and access to its device node and user BAR2; see boards/v80/README.md"]
+        else:
+            rows = [Row("platform", "XDMA driver", FAIL, driver_state(a.dev)[1]),
+                    Row("platform", "ID register", FAIL, f"cannot open {a.dev}: {e}")]
+            hints = diagnose(rows) + ["no device nodes: load the XDMA driver "
+                                      "(otpu-setup; otpu-setup --check says what is missing)"]
         for r in rows:
             print(f"  [{r.status}] {r.section:<8} {r.name:<44} {r.msg}")
-        hints = diagnose(rows) + ["no device nodes: load the XDMA driver "
-                                  "(otpu-setup; otpu-setup --check says what is missing)"]
     else:
         try:
             rows, hints = run(a, t, dev, a.sim)

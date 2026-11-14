@@ -15,9 +15,9 @@ from opentpu.host.board import Board, ConfigMismatch, check_fits, device_config
 from opentpu.host.fake import FakeTransport
 from opentpu.isasim import Config, board_config
 
-# the targets at WG 8 (weight groups, the channel bridges' adapter knobs): the BCU1525 at one
-# slice (targets/bcu1525-wg.toml), at two (bcu1525-s2.toml) and two cards of those (bcu1525-x2)
-WG_TARGETS = {"bcu1525-wg", "bcu1525-s2", "bcu1525-x2"}
+# the targets at WG 8: the BCU1525 at one slice, two slices and two cards, and the V80's
+# initial single-slice V80 integration target
+WG_TARGETS = {"bcu1525-wg", "bcu1525-s2", "bcu1525-x2", "v80"}
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -286,6 +286,56 @@ def test_wg_target():
     assert T.mem_model(t)[:2] == ["+nat_bpc=45600", "+axi_lat=25"]        # its 100 MHz
     assert T.by_platform(7) is not None and T.by_platform(7).name == "bcu1525-x2"
     assert T.by_platform(4) is None
+
+
+def test_v80_target():
+    """The V80 target uses DSP58 cells and eight logical channels: its 32 GiB
+    relative map fits AW 36, with no MIG bank window or assumed HBM performance model."""
+    t = T.load("v80")
+    c, p, u = T.config(t), T.rtl_params(t), T.sim_uarch(t)
+    assert (t.kind, t.family, t.platform_id) == ("fpga", "xilinxversal", 8)
+    assert (c.S, c.D, c.MCOLS, c.WG, c.AW) == (1, 128, 8, 8, 36)
+    assert (p["NCH"], p["CB"], p["CH_LOG2"], p["DRAM_LOG2"]) == (8, 128, 32, 35)
+    assert p["NCH"] * (1 << p["CH_LOG2"]) == c.DRAM_BYTES == 1 << 35
+    assert c.DSTEP and c.STREAM and c.DSTEP2 and c.SE_OWN and c.SEQ_WC and c.KT
+    assert c.GALL and c.CHASH and not c.PAIR and not c.OUTER and not c.BHW
+    assert (u["NCH"], u["CB"], p["AW"]) == (8, 128, 36)
+    assert p["ARCH_HASH"] == T.arch_hash(c)
+    assert T.by_platform(8) == t and T.mem_model(t) == []
+    srcs = T.sources(t)
+    assert len(srcs) == len(set(srcs))
+    assert all((ROOT / "rtl" / f).is_file() for f in srcs)
+    assert "tech/xilinxversal/otpu_tech_dsp.sv" in srcs
+    assert "tech/generic/otpu_tech_dsp.sv" in T.sources(t, "generic")
+    assert "boards/v80/otpu_v80_sys.sv" in srcs
+    assert "boards/v80/otpu_fpga_top_v80.sv" in srcs
+    assert not any(f.startswith(("boards/bcu1525/", "tech/xilinxus/")) for f in srcs)
+
+
+def test_v80_device_config(no_env):
+    """A host selecting another target still recovers the V80's AW 36 and features from
+    the proposed configuration registers, and rejects an incompatible program/hash."""
+    no_env.setenv("OTPU_TARGET", "v80")
+    cfg = T.config("v80")
+    t = FakeTransport(devname=None, regmap=5, pair=False, dstep=True, stream=True,
+                      seq_wc=True, chash=True, outer=False, dstep2=True, se_own=True, kt=True)
+    # FakeTransport's default CFG helper predates WG; supply the grouped machine's
+    # register image as a real board would report it (the capability flags above match).
+    t.cfg_words = R.cfg_words(dict(R.cfg(t.cfg_words), WG=cfg.WG, hash=T.arch_hash(cfg)))
+    b = Board(t)
+    try:
+        info = b.info()
+    finally:
+        b.close()
+    no_env.setenv("OTPU_TARGET", "ypcb-00338")
+    assert info["cfg"]["platform"] == 8 and info["cfg"]["hash"] == T.arch_hash(cfg)
+    assert device_config(info) == cfg
+    check_fits(dataclasses.replace(cfg, DRAM_BYTES=1 << 24), info)
+    with pytest.raises(ConfigMismatch):
+        check_fits(dataclasses.replace(cfg, MCOLS=4), info)
+    info["cfg"]["hash"] ^= 1
+    with pytest.raises(ConfigMismatch, match="CFG_HASH"):
+        device_config(info)
 
 
 def test_native_channels_are_checked(tmp_path):
@@ -705,6 +755,10 @@ def test_target_cli():
     assert run("hash", "ypcb-00338", "MCOLS=4", "LANES=8", "ACT_ROWS=4", "TMEM_WORDS=65536",
                "DSTEP=1", "SEQ_WC=0").strip() == "ff270e6e"
     assert "bcu1525" in run("list")
+    assert "v80" in run("list")
+    env = dict(line.split("=", 1) for line in run("env", "v80").split())
+    assert (env["T_PLATFORM"], env["T_AW"], env["T_NCH"], env["T_CB"]) == ("8", "36", "8", "128")
+    assert run("files", "v80").split() == [f"rtl/{f}" for f in T.sources("v80")]
 
 
 def test_bad_target_files(tmp_path):
@@ -998,12 +1052,12 @@ def test_st16_needs_the_dma_state(tmp_path):
 
 def test_dram_address_bits(tmp_path):
     """[arch] AW (Config.AW, docs/isa.md "Machine model"): DRAM addresses of 32 to AW_MAX bits,
-    DRAM_BYTES a power of two of at most 2^AW; left out, 32 (every target but the BCU's), out of
+    DRAM_BYTES a power of two of at most 2^AW; left out, 32, out of
     arch_hash and rtl_params at 32 (their hashes and parameters as before the field). The
     BCU1525 at WG 8: AW 36, its 32 GiB as 8 virtual channels of 4 GiB (two a DIMM), the RTL's
     AW, DRAM_LOG2 and CH_LOG2 from it."""
     for n in T.names():
-        if n not in ("bcu1525-wg", "bcu1525-s2", "bcu1525-x2"):
+        if n not in ("bcu1525-wg", "bcu1525-s2", "bcu1525-x2", "v80"):
             assert T.config(n).AW == 32 and "AW" not in T.rtl_params(n), n
     # (the BCU1525 at two slices: 16 GiB a slice, 8 virtual channels of 2 GiB, AW 36 as one's)
     t2 = T.load("bcu1525-s2")
@@ -1220,7 +1274,7 @@ def test_tech_families_define_the_same_cells():
         return mods
     ref = iface(ROOT / "rtl/tech/generic/otpu_tech_dsp.sv")
     assert set(ref) == {"otpu_pe", "otpu_mxce", "otpu_ppe"}
-    for fam in ("xilinx7", "xilinxus"):
+    for fam in ("xilinx7", "xilinxus", "xilinxversal"):
         assert iface(ROOT / f"rtl/tech/{fam}/otpu_tech_dsp.sv") == ref, fam
 
 

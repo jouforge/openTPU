@@ -60,7 +60,7 @@ CFG_HASH changes, and the host refuses programs compiled for the other.
 |---|---|---|
 | `[arch]` | the `opentpu.isasim.Config` fields: S, D, MCOLS, ACT_BLOCKS, ACT_ROWS, TMEM / IMEM words, DRAM bytes per slice, LANES, PAIR / DSTEP / STREAM, SEQ_WC (EXPERIMENTAL: the sequencer's wait entries, which the host loads with every program; docs/isa.md "Wait counts"), OUTER (false: a VPU without VOP OUTER, otpu_board OUTER 0 and CAPS2 bit1; the WG targets', whose DeltaNet runs DSTEP), DSTEP2 (true: DSTEP's pair, otpu_board DSTEP2 1 and CAPS2 bit2; the WG targets') | the compiler and the programs. Two targets with the same arch run the same programs |
 | `[uarch]` | timing-only RTL parameters: MXU_IMPL, MXU_E (optional), VPU_CL, ULANES, TMEM_IMPL, RPB / WPB, WIN, FIFO_DEPTH, the trace buffer | the RTL, the co-simulation |
-| `[tech]` | the cell family (`rtl/tech/<family>`: generic, xilinx7, xilinxus, asic), the part or the PDK | the RTL file list |
+| `[tech]` | the cell family (`rtl/tech/<family>`: generic, xilinx7, xilinxus, xilinxversal, asic), the part or the PDK | the RTL file list |
 | `[platform]` | the board: memory type and rate, channels per slice, bytes a slice addresses per channel, the channel beat (an FPGA's: the native adapter's NCH and CB, `rtl/mem/otpu_native_dram.sv`; NCH x channel bytes = DRAM bytes), the host link, the core clock | the board flow, the host runtime |
 
 Every `[arch]` field is stated (but WG, OUTER and DSTEP2, which default to 1, true and false:
@@ -108,8 +108,9 @@ ACT RAM or DRAM than the device has.
   systolic MXU's cells `otpu_pe` and the MX column end `otpu_mxce` (`otpu_tech_dsp.sv`; docs/
   mx_mxu.md section 9): `generic` (behavioural:
   the simulators and the ASIC flows), `xilinx7` (DSP48E1: the YPCB card), `xilinxus` (DSP48E2:
-  UltraScale+). `tests/test_tech.py` checks that the xilinx7 cells equal the generic ones cycle
-  for cycle on yosys's DSP48E1 model.
+  UltraScale+), `xilinxversal` (DSP58: V80). Each family also supplies `otpu_ppe`, the pumped
+  PE. `tests/test_tech.py` compares xilinx7 to generic on yosys's DSP48E1 model;
+  `tools/tech_dsp.py` compares the FPGA families to generic with Vivado UNISIM/XSim.
 - `rtl/shell/`: what the PCIe + native-memory FPGA boards share (control block, trace, the
   channel bridges, XDMA's split, `otpu_board`). The native DRAM adapter is `rtl/mem/otpu_native_dram.sv`.
 - `rtl/boards/<board>/`: the board's top and its clock / memory / host wiring.
@@ -127,12 +128,25 @@ Makefile, `create_project.tcl` and `rtlsim.RTL_SOURCES` hold the same lists, whi
 4. Run the target's arch through the config matrix (`tests/test_config_matrix.py`) and its RTL
    through the token-exact tests (`OTPU_TARGET=<name>`).
 
+### V80 target
+
+The AMD Alveo V80 port uses the board identifier `v80`, with its board flow under
+[`boards/v80/`](../boards/v80/README.md). [The port plan](v80.md) defines the directory
+layout, AMR integration and validation stages. `OTPU_TARGET=v80` selects the initial
+single-slice WG 8 architecture in [`targets/v80.toml`](../targets/v80.toml), with platform ID 8,
+DSP58 arithmetic cells and a mapped 32 GiB relative memory space. QDMA, the AMR platform,
+native/AXI4 bridges, physical top and related core clocks are implemented. The 100/200 MHz
+image has passed routed timing, full 32 GiB memory tests and Qwen3.5-0.8B INT8 card/ISA
+comparison over 128 steps; see the dated qualification
+in the port documentation. Deployment currently uses volatile JTAG.
+
 ## Limits
 
 DRAM addresses are `[arch] AW` bits per slice (Config.AW: 32 to 40, default 32; docs/isa.md
 "Machine model"), and DRAM_BYTES a power of two of at most 2^AW. Every target but the BCU1525 at
-WG 8 leaves AW out: 32 bits, 4 GiB a slice, its hash and RTL parameters as before the field
-(arch_hash and rtl_params leave AW out at 32). bcu1525-wg states AW 36: its 32 GiB (64 GiB
+WG 8 and V80 leaves AW out: 32 bits, 4 GiB a slice, its hash and RTL
+parameters as before the field (arch_hash and rtl_params leave AW out at 32).
+bcu1525-wg states AW 36: its 32 GiB (64 GiB
 later) as 8 virtual channels of 4 GiB, two a DIMM (rtl_params' AW, DRAM_LOG2 35, CH_LOG2 32;
 [bcu1525_wg.md](bcu1525_wg.md) section 8).
 No register says AW; the host takes it from the card's CFG_HASH (opentpu.host.board device_aw:

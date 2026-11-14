@@ -5,6 +5,7 @@ equal the trace with rtl/tech/generic. (rtl/tech/xilinxus's DSP48E2 has no open 
 simulator checks it, docs/targets.md.)"""
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -52,3 +53,9 @@ def test_xilinx7_cells_equal_the_generic_models(tmp_path):
     x7 = _trace(tmp_path, "xilinx7", [model], seeds)
     for s, a, b in zip(seeds, gen, x7):
         assert len(a) == 3984 and a == b, f"seed {s}"
+
+
+@pytest.mark.skipif(shutil.which("xsim") is None, reason="no Vivado simulator/UNISIM")
+def test_xilinxversal_cells_equal_the_generic_models(tmp_path):
+    subprocess.run([sys.executable, str(ROOT / "tools/tech_dsp.py"), "--family", "xilinxversal",
+                    "--out", str(tmp_path)], check=True, timeout=600)

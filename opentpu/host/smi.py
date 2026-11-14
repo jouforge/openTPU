@@ -948,8 +948,8 @@ def main(argv=None, open_transport=None) -> int:
               "(docs/host.md; --sim for the board model)", file=sys.stderr)
         return 1
     if open_transport is None:
-        from .board import XdmaTransport
-        open_transport = lambda dev: XdmaTransport(dev, dma=False)   # noqa: E731
+        from .board import open_transport as board_transport
+        open_transport = lambda dev: board_transport(dev, dma=False)   # noqa: E731
     try:
         return _loop(a, devs, open_transport, emit)
     except KeyboardInterrupt:
