@@ -1990,6 +1990,27 @@ def test_sampler_stream_picks_as_pick():
 
 
 # ------------------------------------------------------------------------------ otpu-diag
+@pytest.mark.parametrize("reserved", [0, 1 << 27])
+def test_diag_fp16_capability_and_reserved_bits(monkeypatch, tmp_path, no_cfg_env, reserved):
+    from opentpu import target
+    from opentpu.host import diag
+    monkeypatch.setenv("OTPU_TARGET", "v80:fp16")
+    cfg = target.config("v80:fp16")
+    card = FakeTransport(devname=None, regmap=5, pair=False, dstep=True, stream=True,
+                         seq_wc=True, chash=True, outer=False, dstep2=True, se_own=True, kt=True)
+    card.cfg_words = R.cfg_words(dict(R.cfg(card.cfg_words), WG=cfg.WG,
+                                     hash=target.arch_hash(cfg)))
+    read = card.reg_read
+    monkeypatch.setattr(card, "reg_read", lambda off: read(off) | (reserved if off == R.R_CAPS2 else 0))
+    out = tmp_path / "diag.json"
+    assert diag.main(["--only", "regs", "--json", str(out)],
+                     open_transport=lambda dev: card) == bool(reserved)
+    rep = json.loads(out.read_text())
+    st = {r["name"]: r["status"] for r in rep["rows"]}
+    assert st["configuration (VERSION)"] == "PASS"
+    assert st["read-only registers: values"] == ("FAIL" if reserved else "PASS")
+
+
 def test_diag_link_is_the_cards_own_speed_at_x8():
     """otpu-diag's PCIe link check: the link at the card's own speed (its LnkCap, the bitstream's
     PCIE_GEN) and x8 passes, Gen1 or Gen2; a Gen2 card trained at 2.5 GT/s or fewer lanes fail."""
