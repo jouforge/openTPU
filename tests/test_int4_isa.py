@@ -77,12 +77,13 @@ def test_decode_rejections_and_hash():
         I.hdq(0, 0, 0, 65536)
 
 
-@pytest.mark.parametrize("lanes,banked", [(4, False), (8, True)])
-def test_decode_rtl(have_verilator, tmp_path, lanes, banked):
+@pytest.mark.parametrize("lanes,banked,wc", [(4, False, False), (4, False, True), (8, True, True)])
+def test_decode_rtl(have_verilator, tmp_path, lanes, banked, wc):
     p, img, _ = program()
-    ref = Machine(CFG, [p], [img.copy()]).run().slices[0]
-    dram, tmem, _ = rtlsim.run(CFG, [p], [img], keep=tmp_path,
-        uarch={"SEQ_WC": 1, "WIN": 16, "ULANES": lanes, "MXU_E": min(lanes, 8), **(TMEM3 if banked else {})},
+    cfg = replace(CFG, SEQ_WC=wc)
+    ref = Machine(cfg, [p], [img.copy()]).run().slices[0]
+    dram, tmem, _ = rtlsim.run(cfg, [p], [img], keep=tmp_path,
+        uarch={"SEQ_WC": int(wc), "WIN": 16, "ULANES": lanes, "MXU_E": min(lanes, 8), **(TMEM3 if banked else {})},
         max_cycles=200000)
     np.testing.assert_array_equal(tmem[0], ref.tmem)
     np.testing.assert_array_equal(dram[0], ref.dram)

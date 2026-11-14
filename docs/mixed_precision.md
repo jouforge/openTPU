@@ -140,7 +140,7 @@ qualified `feat/fp16` artifacts and original V80 flash are retained.
 
 The implementation tests pass at runtime revision `04e49dd5`: 67 mixed-precision
 numerical/compiler/model/RTL tests, plus two native-memory odd-shape/group-tail
-checks, and 221 host/QDMA/target/build-flow tests. The
+checks and one legacy-scoreboard RTL check, plus 221 host/QDMA/target/build-flow tests. The
 latter suite skips one unrelated LFM2.5 test because its checkpoint is absent.
 The native-memory model test includes independent read/write backpressure,
 consecutive tokens and reset/replay; the HDQ unit additionally sweeps 100 cancel
