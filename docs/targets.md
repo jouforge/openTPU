@@ -140,11 +140,15 @@ image has passed routed timing, full 32 GiB memory tests and Qwen3.5-0.8B INT8 c
 comparison over 128 steps; see the dated qualification
 in the port documentation. Deployment currently uses volatile JTAG.
 
-`v80:fp16` is an experimental variant enabling native HMM/HCVT (`FP16 = true`,
-CAPS2 bit26; CFG_HASH `b4ac7354`). It preserves the baseline's clocks and memory
-geometry. The [FP16 integration record](fp16.md) distinguishes its arithmetic,
-instruction/compiler tests from the full model and board qualification still to
-come; the default `v80` remains unchanged.
+`v80:fp16` enables native HMM/HCVT (`FP16 = true`, CAPS2 bit26; CFG_HASH
+`b4ac7354`). It preserves the baseline's clocks and memory geometry. Its full
+model and board qualification are recorded in [FP16 computation](fp16.md).
+
+`v80:mixed` adds packed signed INT4 decode (`W4A16 = true`, CAPS2 bit27;
+CFG_HASH `154f92b2`) for explicit W16A16/W8A8/W4A16 matrix selection. Its software,
+RTL and component timing checks have passed; whole-board qualification is still
+pending. See [mixed matrix precision](mixed_precision.md). The default `v80`
+and qualified `v80:fp16` architectures remain unchanged.
 
 ## Limits
 
