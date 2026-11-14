@@ -106,6 +106,7 @@ def _hash_without_numerics(cfg) -> int:
     d.pop("OUTER1")
     d.pop("QONCE")
     d.pop("SPLMM")
+    d.pop("FP16")
     s = json.dumps({k: (int(v) if isinstance(v, bool) else v) for k, v in sorted(d.items())},
                    separators=(",", ":"))
     return int.from_bytes(hashlib.sha256(s.encode()).digest()[:4], "big")
@@ -1556,7 +1557,9 @@ def test_the_mxu_epilogue_advances_on_flip_flops():
         "assign hd = s[tq_h];", "")
     sl = src("rtl/top/otpu_slice.sv")
     assert re.search(r"localparam bit MXU_TQ = TMEM_IMPL == 3 && TMEM_RPL;", sl)
-    assert ".TQ(MXU_TQ)" in sl and re.search(r"\.t_lost\(tm_lost\[P_MXU\]\)", sl)
+    assert ".TQ(MXU_TQ)" in sl and ".t_lost(im_lost)" in sl
+    assert "assign im_lost = tm_lost[P_MXU];" in sl       # FP16 off: the original path
+    assert "assign im_lost = tm_lost[P_MXU] && !sel;" in sl  # FP16 owns its read replays
     assert "if (!MXU_TQ) r_en[P_MXU] = '0;" in sl
     assert "if (MXU_TQ && rpl_frz[G_MXU]) r_en[P_MXU] = '0;" in sl
 

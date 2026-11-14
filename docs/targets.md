@@ -140,6 +140,12 @@ image has passed routed timing, full 32 GiB memory tests and Qwen3.5-0.8B INT8 c
 comparison over 128 steps; see the dated qualification
 in the port documentation. Deployment currently uses volatile JTAG.
 
+`v80:fp16` is an experimental variant enabling native HMM/HCVT (`FP16 = true`,
+CAPS2 bit26; CFG_HASH `b4ac7354`). It preserves the baseline's clocks and memory
+geometry. The [FP16 integration record](fp16.md) distinguishes its arithmetic,
+instruction/compiler tests from the full model and board qualification still to
+come; the default `v80` remains unchanged.
+
 ## Limits
 
 DRAM addresses are `[arch] AW` bits per slice (Config.AW: 32 to 40, default 32; docs/isa.md

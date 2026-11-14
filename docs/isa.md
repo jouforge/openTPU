@@ -220,8 +220,52 @@ and ST's `n`, QACT's `w2` and `w3`, GATHER's `w3`).
 | 0x20 | MM | see below |
 | 0x21 | QACT | quantize TMEM rows into ACT RAM |
 | 0x22 | QST | quantize TMEM rows into DRAM bytes |
+| 0x23 | HMM | packed binary16 TMEM matrices, FP32 accumulation (`Config.FP16`) |
+| 0x24 | HCVT | FP32 / packed binary16 TMEM conversion (`Config.FP16`) |
 | 0x30 | VOP | vector op on a TMEM tile |
 | 0x40 | GATHER | all-gather over slices |
+
+### HMM and HCVT
+
+These instructions require `Config.FP16` (`[arch] FP16 = true`, CAPS2 bit26).
+They run in the MXU execution slot. Builds without FP16 reject either opcode.
+The numerical contract is in [FP16 computation](fp16.md). All addresses and
+strides below are **32-bit TMEM words**, including packed binary16 operands.
+Each packed row starts in bits 15:0; element 1 occupies bits 31:16. LD / ST move
+these raw words unchanged. This format is separate from DeltaNet's ST16 state.
+
+HMM computes `out[M, N] = A[M, K] @ B[K, N]`, starting at FP32 positive zero,
+or the existing FP32 output with flag bit1 `ACC`. Products accumulate in increasing
+K order. B is K-major, unlike MM's streamed `[N, K]` quantized weight matrix.
+
+| Field | Meaning |
+| --- | --- |
+| `R[ra] + w1` | FP32 output base |
+| `R[rb] + w2` | packed A base |
+| `R[rc] + w3` | packed B base |
+| `w4[15:0]`, `w4[31:16]` | M, N |
+| `w5[15:0]`, `w5[31:16]` | K, A row stride |
+| `w6[15:0]`, `w6[31:16]` | output row stride, B row stride |
+| `w7` | zero |
+
+Strides must be at least `ceil(K/2)`, N and `ceil(N/2)` respectively. Every other
+flag is zero. M or N zero performs no memory access; K zero writes positive zero,
+or preserves the seed bits with ACC. An odd row's padding halfword is ignored.
+
+HCVT uses `R[ra]+w1` as destination, `R[rb]+w2` as source, and **immediate** `w3`
+as the element count (0..65535, unaffected by rc). With flag bit0 clear, it rounds
+FP32 to binary16 and writes `ceil(w3/2)` words, zeroing an odd tail's high halfword.
+With bit0 set, it reads `ceil(w3/2)` words and expands to w3 FP32 words. Other
+flags and w4..w7 are zero; count zero is a no-op.
+
+Both instructions require in-range TMEM accesses and disjoint source/destination
+bounding intervals, including row gaps; A and B may overlap each other. The
+assembler checks encodable shapes/strides and the reference checks bounds and
+overlap before writing. The hardware assumes valid operands, as for other memory
+instructions. Wait footprints include both packed sources, the FP32 destination
+and its ACC read. Both the footprint scoreboard and wait-count sequencer support
+them. FP16 off leaves existing target hashes unchanged; enabling it changes the
+architecture hash and the host checks the advertised capability.
 
 ### MM
 

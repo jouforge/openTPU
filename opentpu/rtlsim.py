@@ -23,8 +23,8 @@ BUILD = ROOT / "build" / "verilator"
 RTL_SOURCES = [
     "vpu/otpu_fp.sv", "vpu/otpu_fpipe.sv", "top/otpu_pkg.sv", "mem/otpu_dram.sv", "mem/otpu_tmem.sv",
     "mem/otpu_native_dram.sv", "mem/otpu_xstg.sv", "mem/otpu_actram.sv", "seq/otpu_seq.sv",
-    "vpu/otpu_vtree.sv", "dma/otpu_dma.sv", "mxu/otpu_mxu.sv", "tech/generic/otpu_tech_dsp.sv",
-    "tech/generic/otpu_tech_ram.sv",
+    "vpu/otpu_vtree.sv", "dma/otpu_dma.sv", "mxu/otpu_hdot.sv", "mxu/otpu_hmxu.sv", "mxu/otpu_mxu.sv",
+    "tech/generic/otpu_tech_dsp.sv", "tech/generic/otpu_tech_ram.sv",
     "vpu/otpu_quant.sv", "vpu/otpu_se_comp.sv", "vpu/otpu_se_tail.sv", "vpu/otpu_vpu.sv",
     "top/otpu_coll.sv", "exp/tmem_nocopy/otpu_tmem_model.sv", "top/otpu_slice.sv",
     "top/otpu_top.sv",
@@ -376,6 +376,8 @@ def top_params(cfg, dram_lat: int = 8, uarch: dict | None = None, axi: bool | in
         p["VPU_MAC"] = 1
     if getattr(cfg, "OUTER1", False) and not cfg.OUTER:  # OUTER decay one (otpu_vpu OUTER1)
         p["VPU_OUTER1"] = 1
+    if getattr(cfg, "FP16", False):
+        p["FP16"] = 1
     if getattr(cfg, "QONCE", False):                     # QACT ST, LDA (otpu_quant / otpu_dma)
         p["QONCE"] = 1
     if getattr(cfg, "SPLMM", False):                     # MM SPL (otpu_mxu SPL)

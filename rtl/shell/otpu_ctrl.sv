@@ -90,6 +90,7 @@
 //                      QONCE; otpu_quant, otpu_dma LDA; docs/isa.md "Quantize once")
 //                      bit25 SPLMM: MM SPL, a split's terms as one MM (otpu_board
 //                      MXU_SPL, otpu_mxu SPL; docs/isa.md "Split terms")
+//                      bit26 FP16: HMM / HCVT, binary16 operands and FP32 accumulation
 //   0x60 + 4k      RW  ARG0..ARG7: the run's arguments, R8..R15 when RUN rises (CAPS bit25;
 //                      docs/isa.md "Arguments"); reset 0
 //   0x80 CFG_SLICES   RO  slices S (version 4: the configuration the target file built,
@@ -166,6 +167,7 @@ module otpu_ctrl #(
   parameter bit VMAC = 1'b0,             // CAPS2 bit20: VOP MAC (otpu_vpu MAC)
   parameter bit OUTER1 = 1'b0,           // CAPS2 bit23: VOP OUTER decay one (otpu_vpu OUTER1)
   parameter bit QONCE  = 1'b0,           // CAPS2 bit24: QACT flag ST and LDA (otpu_quant, otpu_dma)
+  parameter bit FP16       = 1'b0,    // HMM / HCVT (Config.FP16, CAPS2 bit26)
   parameter bit SPLMM = 1'b0,            // CAPS2 bit25: MM SPL (otpu_mxu SPL)
   parameter int BHW = 0,                 // CAPS2 bits 11:6: the bank-half window's slice bytes, log2
   parameter int LDP = 2,                 // cycles after LOAD before the loaders' busy shows (>= 2)
@@ -274,7 +276,7 @@ module otpu_ctrl #(
   // bit4 BMC, bit3 SE_OWN, bit2 DSTEP2, bit1 NO_OUTER, bit0 GATHER
   initial if (BHW < 0 || BHW > 63) $fatal(1, "otpu_ctrl: BHW %0d (0 .. 63)", BHW);
   initial if (ST16 < 0 || ST16 > 2) $fatal(1, "otpu_ctrl: ST16 %0d (0 .. 2)", ST16);
-  localparam logic [31:0] CAPS2 = {6'd0, SPLMM, QONCE, OUTER1, QSTHL, QHL, VMAC, VSIG, ST16S, SPLITQ, FSUM, NC > 1, 2'(ST16), ICACHE, 6'(BHW), KT, HAS_BMC, SE_OWN, DSTEP2, !OUTER,
+  localparam logic [31:0] CAPS2 = {5'd0, FP16, SPLMM, QONCE, OUTER1, QSTHL, QHL, VMAC, VSIG, ST16S, SPLITQ, FSUM, NC > 1, 2'(ST16), ICACHE, 6'(BHW), KT, HAS_BMC, SE_OWN, DSTEP2, !OUTER,
                                    COLL_GATHER || S > 1};
 
   logic [63:0] cycles;

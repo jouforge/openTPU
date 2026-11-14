@@ -885,6 +885,7 @@ class IsaCard(FakeTransport):
                     | (R.CAP2_VSIG if cfg.VSIG else 0)
                     | (R.CAP2_VMAC if cfg.VMAC else 0)
                     | (R.CAP2_OUTER1 if cfg.OUTER1 and not cfg.OUTER else 0)
+                    | (R.CAP2_FP16 if cfg.FP16 else 0)
                     | (R.CAP2_QONCE if cfg.QONCE else 0)
                     | (R.CAP2_SPLMM if cfg.SPLMM else 0)
                     | (R.CAP2_XCARD if self.sh.n > 1 else 0))

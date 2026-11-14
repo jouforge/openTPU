@@ -58,6 +58,7 @@ module tb_board;
   parameter bit QUANT_QSTB  = 1'b0;   // QST rows through the row buffer (otpu_quant QSTB; timing only)
   parameter bit QUANT_QSTHL = 1'b0;   // QST HL: a GRP ROW QST's hi and lo from one read (otpu_quant QSTHL; Config.QSTHL)
   parameter bit QONCE      = 1'b0;    // QACT flag ST and LDA (Config.QONCE, CAPS2 bit24)
+  parameter bit FP16       = 1'b0;    // HMM / HCVT (Config.FP16, CAPS2 bit26)
   parameter int ULANES     = LANES;
   parameter int WIN        = 16;
   parameter int LAT        = 20;
@@ -164,7 +165,7 @@ module tb_board;
   end
 
   otpu_board #(.NC(NCARDS), .S(S), .D(D), .MCOLS(MCOLS), .ACT_ROWS(ACT_ROWS), .ACT_BLOCKS(ACT_BLOCKS), .TMEM_WORDS(TMEM_WORDS),
-               .IMEM_WORDS(IMEM_WORDS), .LANES(LANES), .VPU_CL(VPU_CL), .MXU_IMPL(MXU_IMPL), .MXU_E(MXU_E), .MXU_QD(MXU_QD), .QUANT_R1(QUANT_R1), .QUANT_PW(QUANT_PW), .QUANT_SPLIT(QUANT_SPLIT), .QUANT_HL(QUANT_HL), .QUANT_SWW(QUANT_SWW), .QUANT_QSTB(QUANT_QSTB), .QUANT_QSTHL(QUANT_QSTHL), .QONCE(QONCE), .ULANES(ULANES), .WIN(WIN), .CORE_KHZ(CORE_KHZ),
+               .IMEM_WORDS(IMEM_WORDS), .LANES(LANES), .VPU_CL(VPU_CL), .MXU_IMPL(MXU_IMPL), .MXU_E(MXU_E), .MXU_QD(MXU_QD), .QUANT_R1(QUANT_R1), .QUANT_PW(QUANT_PW), .QUANT_SPLIT(QUANT_SPLIT), .QUANT_HL(QUANT_HL), .QUANT_SWW(QUANT_SWW), .QUANT_QSTB(QUANT_QSTB), .QUANT_QSTHL(QUANT_QSTHL), .QONCE(QONCE), .FP16(FP16), .ULANES(ULANES), .WIN(WIN), .CORE_KHZ(CORE_KHZ),
                .BUILD_ID(BUILD_ID), .DDR_MTS(DDR_MTS), .TRACE_DEPTH(TRACE_DEPTH), .TRACE_QD(TRACE_QD),
                .PQ_WIN(PQ_WIN), .DSTEP(DSTEP), .HOSTCAL(HOSTCAL), .SEQ_WC(SEQ_WC), .PLATFORM(PLATFORM),
                .ARCH_HASH(ARCH_HASH), .COLL_GATHER(COLL_GATHER || S > 1), .COLL_PIPE(COLL_PIPE), .XRS(XRS),

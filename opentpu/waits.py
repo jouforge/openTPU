@@ -86,7 +86,7 @@ DEFAULT = 0x0111_0111 | (VMASK << 32)  # a pc never reached: every unit's last, 
 FOLLOW = 1 << 28                  # the counts' word: a VOP follows the GATHER its k_4 names
 FOLLOWS = (I.V_RSUM, I.V_RSSQ, I.V_RMAX, I.V_ARGMAX)    # the functions that may (A alone)
 UNIT = {I.LD: U_DMA, I.ST: U_DMA, I.DSTEP: U_DMA, I.STREAM: U_DMA, I.WAITW: U_DMA,
-        I.LDA: U_DMA, I.MM: U_MXU, I.QACT: U_Q, I.QST: U_Q, I.VOP: U_VPU,
+        I.LDA: U_DMA, I.MM: U_MXU, I.HMM: U_MXU, I.HCVT: U_MXU, I.QACT: U_Q, I.QST: U_Q, I.VOP: U_VPU,
         I.BAR: U_COLL, I.GATHER: U_COLL, I.RLD: U_COLL}
 WUNIT = (U_DMA, U_MXU, U_Q, U_VPU, U_COLL, U_DMA, U_Q)
 DEPTH = tuple(VMAX if u == U_VPU else KMAX for u in range(NUNITS))   # history per unit (window 16)
@@ -214,7 +214,7 @@ def resolve(ins: I.Instr, R, aw: int = 32) -> list:
     add(0, ins.ra)
     if op not in (I.QACT, I.LDA):
         add(1, ins.rb)
-    if op not in (I.QACT, I.LD, I.ST, I.GATHER, I.LDA) or op == I.QACT and ins.flags & I.F_QST:
+    if op not in (I.QACT, I.LD, I.ST, I.GATHER, I.LDA, I.HCVT) or op == I.QACT and ins.flags & I.F_QST:
         add(2, ins.rc)                  # (QACT ST: its DRAM rows, R[rc] + w3)
     if op == I.VOP:
         add(6, ins.rd)
@@ -237,6 +237,20 @@ def footprint(ins: I.Instr, R, D: int = 128, S: int = 1, aw: int = 32) -> Fp:
         rd.append(mk(SP_DRAM, w[0], c[2] << 2)); wr.append(mk(SP_TMEM, w[1], c[2]))
     elif op == I.ST:
         rd.append(mk(SP_TMEM, w[1], c[2])); wr.append(mk(SP_DRAM, w[0], c[2] << 2))
+    elif op == I.HCVT:
+        n = c[2]
+        rd.append(mk(SP_TMEM, w[1], (n + 1) // 2 if fl & 1 else n))
+        wr.append(mk(SP_TMEM, w[0], n if fl & 1 else (n + 1) // 2))
+    elif op == I.HMM:
+        m, n, k = c[3] & 65535, c[3] >> 16, c[4] & 65535
+        if m and n:
+            out = mk(SP_TMEM, w[0], (m - 1) * (c[5] & 65535) + n)
+            wr.append(out)
+            if fl & I.F_ACC:
+                rd.append(out)
+            if k:
+                rd.append(mk(SP_TMEM, w[1], (m - 1) * (c[4] >> 16) + (k + 1) // 2))
+                rd.append(mk(SP_TMEM, w[2], (k - 1) * (c[5] >> 16) + (n + 1) // 2))
     elif op == I.STREAM:
         wr.append(mk(SP_DRAM, w[1], 4 * 256 * 256)); wr.append(mk(SP_DRAM, w[2], 4 * 256 * 256))
         wr.append(mk(SP_TMEM, w[6], 256))

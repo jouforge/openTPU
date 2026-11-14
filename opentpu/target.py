@@ -121,8 +121,8 @@ URAM_KEYS = ("ACT_UCOLS",)
 ARCH_DEFAULTS = {"WG": 1, "OUTER": True, "DSTEP2": False, "KT": False, "AW": 32, "BHW": 0,
                  "ICACHE": False, "SEXACT": False, "ST16": "", "FSUM": False, "VSIG": False,
                  "VMAC": False, "KVSPLIT": 0, "SPLITQ": False, "ST16S": False, "QHL": False,
-                 "QSTHL": False, "OUTER1": False, "SPLMM": False, "DNCHUNK": 0, "QONCE": False,
-                 "DNMERGE": 0}
+                 "QSTHL": False, "OUTER1": False, "SPLMM": False, "FP16": False,
+                 "DNCHUNK": 0, "QONCE": False, "DNMERGE": 0}
 ST16_CODES = {"": 0, "e6m9": 1, "bf16": 2}    # [arch] ST16: otpu_dma ST16 (isa.ST16_CODE)
 AW_MAX = 40                     # DRAM address bits a target may state (Config.AW: 32 .. AW_MAX)
 # Config fields a target does not state: config() derives them (CHASH: the memory's channel hash,
@@ -146,7 +146,8 @@ SIM_LANES_MAX = 16
 # Makefile, create_project.tcl, tools/synth).
 CORE = ["vpu/otpu_fp.sv", "vpu/otpu_fpipe.sv", "top/otpu_pkg.sv", "mem/otpu_tmem.sv",
         "mem/otpu_actram.sv", "seq/otpu_seq.sv", "vpu/otpu_vtree.sv", "dma/otpu_dma.sv",
-        "mxu/otpu_mxu.sv", "vpu/otpu_quant.sv", "vpu/otpu_se_comp.sv", "vpu/otpu_se_tail.sv",
+        "mxu/otpu_hdot.sv", "mxu/otpu_hmxu.sv", "mxu/otpu_mxu.sv", "vpu/otpu_quant.sv",
+        "vpu/otpu_se_comp.sv", "vpu/otpu_se_tail.sv",
         "vpu/otpu_vpu.sv", "top/otpu_coll.sv", "top/otpu_slice.sv"]
 TECH = {"generic": ["tech/generic/otpu_tech_dsp.sv", "tech/generic/otpu_tech_ram.sv"],
         "xilinx7": ["tech/xilinx7/otpu_tech_dsp.sv", "tech/generic/otpu_tech_ram.sv"],
@@ -291,6 +292,9 @@ def load(name: str | None = None) -> Target:
     if a["S"] < 1 or a["D"] % 32 or a["MCOLS"] < 1 or a["LANES"] & (a["LANES"] - 1):
         raise TargetError(f"{path}: bad arch (S >= 1, D a multiple of 32, LANES a power of two)")
     wg = a["WG"]
+    hl = raw["uarch"]["ULANES"]
+    if a["FP16"] and (hl < 2 or hl & (hl - 1)):
+        raise TargetError(f"{path}: FP16 needs ULANES a power of two >= 2")
     if wg < 1 or wg & (wg - 1) or wg > a["MCOLS"]:
         raise TargetError(f"{path}: WG {wg}: a power of two, at most MCOLS (a group's rows each "
                           f"take a column)")
@@ -500,8 +504,8 @@ def arch_hash(cfg) -> int:
     on, ST16S (STREAM's ST16R / ST16W) only when on, QHL (QACT flag HL) and QSTHL (QST HL)
     only when on, VSIG
     (VOP SIGMOID / SILU), VMAC (VOP MAC), OUTER1 (VOP OUTER decay one), QONCE (QACT ST,
-    LDA) and SPLMM (MM SPL) only when on, SEXACT, KVSPLIT, DNCHUNK and DNMERGE never
-    (compile choices, the same machine)."""
+    LDA), SPLMM (MM SPL) and FP16 (HMM / HCVT) only when on, SEXACT, KVSPLIT, DNCHUNK and
+    DNMERGE never (compile choices, the same machine)."""
     d = dict(dataclasses.asdict(cfg), NUMERICS=NUMERICS)
     d.pop("SEXACT", None)
     d.pop("KVSPLIT", None)
@@ -533,6 +537,8 @@ def arch_hash(cfg) -> int:
         d.pop("OUTER1", None)
     if not d.get("QONCE"):
         d.pop("QONCE", None)
+    if not d.get("FP16"):
+        d.pop("FP16", None)
     if not d.get("SPLMM"):
         d.pop("SPLMM", None)
     if not d.get("GALL") or d.get("WG", 1) == 1:
@@ -614,6 +620,8 @@ def sim_uarch(t: Target | str | None = None) -> dict:
         d["VPU_MAC"] = 1
     if t.arch["OUTER1"]:                        # otpu_vpu's VOP OUTER decay one
         d["VPU_OUTER1"] = 1
+    if t.arch["FP16"]:
+        d["FP16"] = 1
     if t.arch["QONCE"]:                         # otpu_quant's QACT ST, otpu_dma's LDA
         d["QONCE"] = 1
     if t.arch["SPLMM"]:                         # otpu_mxu's MM SPL
@@ -692,6 +700,7 @@ def rtl_params(t: Target | str | None = None) -> dict:
       | ({"VPU_SIG": 1} if a["VSIG"] else {}) \
       | ({"VPU_MAC": 1} if a["VMAC"] else {}) \
       | ({"VPU_OUTER1": 1} if a["OUTER1"] else {}) \
+      | ({"FP16": 1} if a["FP16"] else {}) \
       | ({"QONCE": 1} if a["QONCE"] else {}) \
       | ({"MXU_SPL": 1} if a["SPLMM"] else {}) \
       | ({"ICACHE": 1} | {k: int(u[k]) for k in ("IC_LINES", "IC_PF") if k in u}
@@ -790,6 +799,8 @@ def build_config(t: Target | str | None = None, **knobs):
     if knobs.get("OUTER1") is not None:
         a["OUTER1"] = bool(int(knobs["OUTER1"]))
     a["OUTER1"] = a["OUTER1"] and a["VMAC"] and not a["OUTER"]
+    if knobs.get("FP16") is not None:
+        a["FP16"] = bool(int(knobs["FP16"]))
     if knobs.get("QONCE") is not None:
         a["QONCE"] = bool(int(knobs["QONCE"]))
     a["QONCE"] = a["QONCE"] and a["SEQ_WC"]

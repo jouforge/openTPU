@@ -78,6 +78,7 @@ module otpu_board #(
   parameter bit QUANT_QSTB  = 1'b0,   // QST rows through the row buffer (otpu_quant QSTB; timing only)
   parameter bit QUANT_QSTHL = 1'b0,   // QST HL: a GRP ROW QST's hi and lo from one read (otpu_quant QSTHL; Config.QSTHL)
   parameter bit QONCE      = 1'b0,    // QACT flag ST and LDA (otpu_slice; Config.QONCE, CAPS2 bit24)
+  parameter bit FP16       = 1'b0,    // HMM / HCVT (Config.FP16, CAPS2 bit26)
   parameter int VPU_CL     = (LANES >= 8) ? LANES / 4 : 1,  // VPU lanes with exp2/recip/rsqrt
   parameter int ULANES     = LANES,   // TMEM lanes of the MXU and the quantizer
   parameter int CORE_KHZ    = 100000,  // the core clock (CORE_KHZ register)
@@ -393,7 +394,7 @@ module otpu_board #(
               .FSUM(VPU_FSUM != 0 && DSTEP && LANES == 8 && D >= 32), // (otpu_slice's VPU FSUM)
               .SPLITQ(QUANT_SPLIT), .QHL(QUANT_HL), .QSTHL(QUANT_QSTHL),
               .VSIG(VPU_SIG != 0 && DSTEP && LANES == 8 && D >= 32),
-              .VMAC(VPU_MAC != 0), .OUTER1(VPU_OUTER1 != 0), .QONCE(QONCE),
+              .VMAC(VPU_MAC != 0), .OUTER1(VPU_OUTER1 != 0), .QONCE(QONCE), .FP16(FP16),
               .SPLMM(MXU_SPL != 0 && WG > 1),
               .LDP(S > 1 ? 2 + 2 * XRS : 2),  // LOAD to a slice's busy and back
               // each slice on its NCH channels' 2^CH_LOG2 bytes each (otpu_native_dram)
@@ -479,7 +480,7 @@ module otpu_board #(
   otpu_slice #(.SID(0), .S(S), .D(D), .MCOLS(MCOLS), .ACT_BLOCKS(ACT_BLOCKS), .ACT_ROWS(ACT_ROWS),
                .TMEM_WORDS(TMEM_WORDS), .IMEM_WORDS(IMEM_WORDS), .FIFO_DEPTH(FIFO_DEPTH),
                .LANES(LANES), .WIN(WIN), .RPB(RPB), .WPB(WPB), .MXU_IMPL(MXU_IMPL),
-               .MXU_CL(MXU_CL), .MXU_E(MXU_E), .MXU_QD(MXU_QD), .QUANT_R1(QUANT_R1), .QUANT_PW(QUANT_PW), .QUANT_SPLIT(QUANT_SPLIT), .QUANT_HL(QUANT_HL), .QUANT_SWW(QUANT_SWW), .QUANT_QSTB(QUANT_QSTB), .QUANT_QSTHL(QUANT_QSTHL), .QONCE(QONCE), .VPU_CL(VPU_CL), .ULANES(ULANES), .PQ_WIN(PQ_WIN),
+               .MXU_CL(MXU_CL), .MXU_E(MXU_E), .MXU_QD(MXU_QD), .QUANT_R1(QUANT_R1), .QUANT_PW(QUANT_PW), .QUANT_SPLIT(QUANT_SPLIT), .QUANT_HL(QUANT_HL), .QUANT_SWW(QUANT_SWW), .QUANT_QSTB(QUANT_QSTB), .QUANT_QSTHL(QUANT_QSTHL), .QONCE(QONCE), .FP16(FP16), .VPU_CL(VPU_CL), .ULANES(ULANES), .PQ_WIN(PQ_WIN),
                .SEQ_WC(SEQ_WC), .HAS_DSTEP(DSTEP), .TMEM_IMPL(TMEM_IMPL), .TMEM_RQ(TMEM_RQ),
                .TMEM_NSB(TMEM_NSB), .TMEM_SBP(TMEM_SBP), .TMEM_SBH(TMEM_SBH), .TMEM_RPL(TMEM_RPL), .TMEM_TDP(TMEM_TDP),
                .TMEM_GST(TMEM_GST), .TMEM_PMP(TMEM_PMP), .TMEM_PRK(TMEM_PRK), .TMEM_SDM(TMEM_SDM),
@@ -646,7 +647,7 @@ module otpu_board #(
     otpu_slice #(.SID(s), .S(S), .D(D), .MCOLS(MCOLS), .ACT_BLOCKS(ACT_BLOCKS),
                  .ACT_ROWS(ACT_ROWS), .TMEM_WORDS(TMEM_WORDS), .IMEM_WORDS(IMEM_WORDS),
                  .FIFO_DEPTH(FIFO_DEPTH), .LANES(LANES), .WIN(WIN), .RPB(RPB), .WPB(WPB),
-                 .MXU_IMPL(MXU_IMPL), .MXU_CL(MXU_CL), .MXU_E(MXU_E), .MXU_QD(MXU_QD), .QUANT_R1(QUANT_R1), .QUANT_PW(QUANT_PW), .QUANT_SPLIT(QUANT_SPLIT), .QUANT_HL(QUANT_HL), .QUANT_SWW(QUANT_SWW), .QUANT_QSTB(QUANT_QSTB), .QUANT_QSTHL(QUANT_QSTHL), .QONCE(QONCE), .VPU_CL(VPU_CL),
+                 .MXU_IMPL(MXU_IMPL), .MXU_CL(MXU_CL), .MXU_E(MXU_E), .MXU_QD(MXU_QD), .QUANT_R1(QUANT_R1), .QUANT_PW(QUANT_PW), .QUANT_SPLIT(QUANT_SPLIT), .QUANT_HL(QUANT_HL), .QUANT_SWW(QUANT_SWW), .QUANT_QSTB(QUANT_QSTB), .QUANT_QSTHL(QUANT_QSTHL), .QONCE(QONCE), .FP16(FP16), .VPU_CL(VPU_CL),
                  .ULANES(ULANES), .PQ_WIN(PQ_WIN), .SEQ_WC(SEQ_WC), .HAS_DSTEP(DSTEP),
                  .TMEM_IMPL(TMEM_IMPL), .TMEM_RQ(TMEM_RQ),
                  .TMEM_NSB(TMEM_NSB), .TMEM_SBP(TMEM_SBP), .TMEM_SBH(TMEM_SBH), .TMEM_RPL(TMEM_RPL), .TMEM_TDP(TMEM_TDP),

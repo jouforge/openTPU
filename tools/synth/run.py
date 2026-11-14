@@ -22,7 +22,7 @@ OUT = Path(os.environ.get("SYNTH_OUT", ROOT / "build" / "synth_board"))
 BASE = ["vpu/otpu_fp.sv", "vpu/otpu_fpipe.sv", "top/otpu_pkg.sv",
         "tech/generic/otpu_tech_ram.sv"]                   # the RAMs the components use
 ALL = ["mem/otpu_tmem.sv", "mem/otpu_native_dram.sv", "mem/otpu_actram.sv",
-       "seq/otpu_seq.sv", "vpu/otpu_vtree.sv", "dma/otpu_dma.sv", "mxu/otpu_mxu.sv",
+       "seq/otpu_seq.sv", "vpu/otpu_vtree.sv", "dma/otpu_dma.sv", "mxu/otpu_hdot.sv", "mxu/otpu_hmxu.sv", "mxu/otpu_mxu.sv",
        "tech/xilinx7/otpu_tech_dsp.sv", "tech/generic/otpu_tech_ram.sv",
        "vpu/otpu_quant.sv", "vpu/otpu_se_comp.sv", "vpu/otpu_se_tail.sv", "vpu/otpu_vpu.sv",
        "top/otpu_coll.sv", "top/otpu_slice.sv", "shell/otpu_ctrl.sv",

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import fp32 as F
+from . import fp16 as H
 from . import isa as I
 from . import quant as Q
 
@@ -120,6 +121,7 @@ class Config:
     #                          MM, the weights' lo part HLD KiB after hi, the lo terms' offsets
     #                          +8 (one epilogue: the chunked DeltaNet core's MMs); off, the bit
     #                          refused
+    FP16: bool = False       # HMM / HCVT: native FP16 operands, FP32 accumulation (CAPS2 bit26)
     SEXACT: bool = False     # a compile choice, not the hardware's (never in the CFG_HASH): at
     #                          S > 1 Qwen3.5's images S-exact (qwen35.s_exact_on: S = 1's
     #                          DeltaNet head groups and dense MLP chunks over the slices, so the
@@ -472,6 +474,8 @@ class Slice:
             return self._lda(ins)
         if op == I.MM:
             return self._mm(ins)
+        if op in (I.HMM, I.HCVT):
+            return self._half(ins)
         if op == I.QACT:
             return self._qact(ins)
         if op == I.QST:
@@ -479,6 +483,56 @@ class Slice:
         if op == I.VOP:
             return self._vop(ins)
         raise SimError(f"slice {self.sid}: bad opcode {op:#x} at pc {self.pc}")
+
+    def _half(self, ins: I.Instr) -> None:
+        if not self.cfg.FP16:
+            raise SimError("HMM/HCVT: this configuration has no FP16 (Config.FP16)")
+        w = ins.w
+        dst, a = self.ta(ins.ra, w[0]), self.ta(ins.rb, w[1])
+
+        def check_range(base, length):
+            if length and (base < 0 or base + length > self.cfg.TMEM_WORDS):
+                raise SimError("HMM/HCVT: TMEM index out of range")
+
+        def separate(src, count, length):
+            check_range(src, count)
+            if count and length and dst < src + count and src < dst + length:
+                raise SimError("HMM/HCVT: source/destination overlap")
+
+        def half_rows(base, rows, cols, stride):
+            idx = base + np.arange(rows)[:, None] * stride + np.arange(cols)[None, :] // 2
+            return ((self.tmem[idx] >> ((np.arange(cols) & 1) * 16)) & 65535).astype(np.uint16)
+
+        if ins.op == I.HCVT:
+            n = w[2]
+            if ins.flags & ~1 or n > 65535 or any(w[3:]):
+                raise SimError("HCVT: invalid flags, count or reserved words")
+            unpack = bool(ins.flags & 1)
+            nr, nw = ((n + 1) // 2, n) if unpack else (n, (n + 1) // 2)
+            check_range(dst, nw); separate(a, nr, nw)
+            if not n:
+                return
+            if unpack:
+                self.tput(dst + np.arange(n), H.unpack(half_rows(a, 1, n, nr)[0]))
+            else:
+                h = np.zeros(n + (n & 1), np.uint32)
+                h[:n] = H.pack(self.tget(a + np.arange(n)))
+                self.tmem[dst:dst + nw] = h[::2] | (h[1::2] << 16)
+            return
+        b = self.ta(ins.rc, w[2])
+        m, n, k = w[3] & 65535, w[3] >> 16, w[4] & 65535
+        ars, brs, ors = w[4] >> 16, w[5] >> 16, w[5] & 65535
+        if ins.flags & ~I.F_ACC or w[6] or ars < (k + 1) // 2 or brs < (n + 1) // 2 or ors < n:
+            raise SimError("HMM: invalid flags, strides or reserved word")
+        if not m or not n:
+            return
+        length = (m - 1) * ors + n
+        check_range(dst, length)
+        separate(a, (m - 1) * ars + (k + 1) // 2 if k else 0, length)
+        separate(b, (k - 1) * brs + (n + 1) // 2 if k else 0, length)
+        out = dst + np.arange(m)[:, None] * ors + np.arange(n)[None, :]
+        seed = self.tget(out) if ins.flags & I.F_ACC else None
+        self.tput(out, H.matmul(half_rows(a, m, k, ars), half_rows(b, k, n, brs), seed))
 
     def _dstep(self, ins: I.Instr) -> None:
         """DSTEP: every input (q, k, v, e, beta and each state row) is read before the row's

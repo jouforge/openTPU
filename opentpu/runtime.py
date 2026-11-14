@@ -2,6 +2,7 @@
 
 Host arguments:
   Input(a)            fp32 array replicated into every slice's DRAM   -> Tensor
+  HalfInput(a)        binary16, word-padded rows in each slice's DRAM  -> HalfTensor
   Weight(w, shard=0, fmt="int8")  fp32 [N, K] quantized to int8 + per-D-block scales (or 4-bit:
                       fmt="int4" | "fp4"), optionally sharded
                       over slices by rows (shard=0) or columns (shard=1) -> QTensor
@@ -17,8 +18,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import fp32 as F
+from . import fp16 as H
 from . import quant as Q
-from .compiler import (Affine, Compiled, KVDesc, Kernel, QTensor, Tensor, k_scale_bytes,
+from .compiler import (Affine, Compiled, HalfTensor, KVDesc, Kernel, QTensor, Tensor, k_scale_bytes,
                        gall_wg, kv_bytes, kv_rows)
 from .isasim import Config, Machine
 
@@ -28,6 +30,18 @@ ALIGN = 128                  # DRAM allocations: whole MXU chunks (D <= 128)
 class Input:
     def __init__(self, array):
         self.array = F.ftz(np.asarray(array, dtype=np.float32))
+
+
+class HalfInput:
+    """FP32 host values rounded to binary16, each DRAM row padded to a whole word."""
+
+    def __init__(self, array):
+        a = np.asarray(array, dtype=np.float32)
+        if a.ndim not in (1, 2) or any(n == 0 for n in a.shape):
+            raise ValueError("HalfInput must be a nonempty 1-D or 2-D array")
+        self.shape = a.shape
+        self.array = np.zeros((*a.shape[:-1], (a.shape[-1] + 1) // 2 * 2), dtype="<u2")
+        self.array[..., :a.shape[-1]] = H.pack(a)
 
 
 class Output:
@@ -125,6 +139,17 @@ def place(cfg: Config, args: dict, weights_at: int | None = None) -> tuple[_Dram
                 dram.put(s, addr, a.array)
             layout.params[name] = (a, addr)
             desc = _tensor(addr, a.array.shape, a)
+            for s in range(S):
+                bound[s][name] = desc
+        elif isinstance(a, HalfInput):
+            if not cfg.FP16:
+                raise ValueError("HalfInput requires Config.FP16")
+            addr = dram.alloc(a.array.nbytes)
+            for s in range(S):
+                dram.put(s, addr, a.array)
+            layout.params[name] = (a, addr)
+            strides = (a.array.shape[-1], 1) if len(a.shape) == 2 else (1,)
+            desc = HalfTensor(Tensor(Affine(addr), a.shape, strides, a, esize=2))
             for s in range(S):
                 bound[s][name] = desc
         elif isinstance(a, Output):

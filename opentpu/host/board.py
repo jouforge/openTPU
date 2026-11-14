@@ -877,6 +877,8 @@ class SimTransport:
             p["VPU_MAC"] = 1
         if (cfg.OUTER1 or rp.get("VPU_OUTER1")) and not cfg.OUTER:   # OUTER decay one (bit23)
             p["VPU_OUTER1"] = 1
+        if cfg.FP16 or rp.get("FP16"):
+            p["FP16"] = 1
         if cfg.QONCE or rp.get("QONCE"):            # QACT ST, LDA (CAPS2 bit24)
             p["QONCE"] = 1
         # the VPU's composites (VPU_CNS 5: two passes), the MXU's pumped array (MXU_PUMP, on
@@ -983,7 +985,7 @@ class SimTransport:
             SPLITQ=p.get("QUANT_SPLIT", 0), ST16S=p.get("ST16S", 0), QHL=p.get("QUANT_HL", 0),
             QSTHL=p.get("QUANT_QSTHL", 0), VSIG=p.get("VPU_SIG", 0), VMAC=p.get("VPU_MAC", 0),
             OUTER1=p.get("VPU_OUTER1", 0), QONCE=p.get("QONCE", 0),
-            SPLMM=p.get("MXU_SPL", 0))
+            SPLMM=p.get("MXU_SPL", 0), FP16=p.get("FP16", 0))
         if self.bcuwg:
             bc = replace(bc, DRAM_BYTES=self.nch << self.caw + 7)
         else:                       # tb_board: the DRAM its otpu_board reports (DRAM_LOG2, 4 GiB
@@ -2008,7 +2010,7 @@ def device_config(info: dict, **kw):
            "KT": _kt(info), "ICACHE": _icache(info), "ST16": _st16(info),
            "FSUM": _fsum(info), "SPLITQ": _splitq(info), "ST16S": _st16s(info),
            "QHL": _qhl(info), "QSTHL": _qsthl(info), "VSIG": _vsig(info), "VMAC": _vmac(info),
-           "OUTER1": _outer1(info), "QONCE": _qonce(info), "SPLMM": _splmm(info),
+           "OUTER1": _outer1(info), "QONCE": _qonce(info), "SPLMM": _splmm(info), "FP16": _fp16(info),
            "BHW": (info.get("caps2") or {}).get("bhw", 0)}
     c = info.get("cfg")
     if c:                                         # register map 4: the device says the rest
@@ -2142,6 +2144,11 @@ def _qonce(info: dict) -> bool:
     return (info.get("caps2") or {}).get("qonce", False)
 
 
+def _fp16(info: dict) -> bool:
+    """Native FP16 HMM / HCVT: CAPS2 bit26, absent on older images."""
+    return (info.get("caps2") or {}).get("fp16", False)
+
+
 def _splmm(info: dict) -> bool:
     """The MXU runs MM SPL (a split's terms as one MM): CAPS2 bit25 (clear on every bitstream
     before it)."""
@@ -2200,7 +2207,7 @@ def _reg_config(info: dict, aw: int, wc_win: int = 16):
                         ICACHE=_icache(info), ST16=_st16(info), FSUM=_fsum(info),
                         SPLITQ=_splitq(info), ST16S=_st16s(info), QHL=_qhl(info),
                         QSTHL=_qsthl(info), VSIG=_vsig(info), VMAC=_vmac(info),
-                        OUTER1=_outer1(info), QONCE=_qonce(info), SPLMM=_splmm(info), AW=aw,
+                        OUTER1=_outer1(info), QONCE=_qonce(info), SPLMM=_splmm(info), FP16=_fp16(info), AW=aw,
                         BHW=(info.get("caps2") or {}).get("bhw", 0),
                         WC_WIN=wc_win if c.get("SEQ_WC") else 16, **sizes)
 
@@ -2326,7 +2333,8 @@ def check_fits(cfg, info: dict) -> None:
     if getattr(cfg, "QONCE", False) and not _qonce(info):
         raise ConfigMismatch("the programs take QACT ST and LDA (Config.QONCE) and the "
                              "bitstream has neither (CAPS2 bit24 clear) (use device_config)")
-    for k, has, what in (("FSUM", _fsum, "EXP2SUB's fused row sums (CAPS2 bit16)"),
+    for k, has, what in (("FP16", _fp16, "HMM / HCVT (CAPS2 bit26)"),
+                         ("FSUM", _fsum, "EXP2SUB's fused row sums (CAPS2 bit16)"),
                          ("SPLITQ", _splitq, "QACT / QST flag LO (CAPS2 bit17)"),
                          ("ST16S", _st16s, "STREAM's ST16R / ST16W (CAPS2 bit18)"),
                          ("VSIG", _vsig, "VOP SIGMOID / SILU (CAPS2 bit19)"),

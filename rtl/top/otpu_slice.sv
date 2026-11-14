@@ -67,6 +67,7 @@ module otpu_slice
   parameter bit QUANT_QSTB  = 1'b0,   // QST rows through the row buffer (otpu_quant QSTB; timing only)
   parameter bit QUANT_QSTHL = 1'b0,   // QST HL: a GRP ROW QST's hi and lo from one read (otpu_quant QSTHL; Config.QSTHL)
   parameter bit QONCE      = 1'b0,    // QACT flag ST and LDA (otpu_quant, otpu_dma, otpu_actram DPORT, otpu_seq; Config.QONCE)
+  parameter bit FP16       = 1'b0,    // HMM / HCVT (Config.FP16, CAPS2 bit26)
   parameter int VPU_CL     = (LANES >= 8) ? LANES / 4 : 1,  // VPU lanes with the composite functions
   parameter int ULANES     = LANES,   // TMEM lanes of the MXU and the quantizer (<= LANES)
   parameter int PQ_WIN     = 64,      // cycles per P/Q counter window (+bucket= in simulation)
@@ -356,7 +357,7 @@ module otpu_slice
              .WIN(WIN), .STREAMS(HAS_SS), .WG(WG), .WAITC(SEQ_WC), .STYLE(IMEM_STYLE),
              .WSTYLE(IMEM_WC_STYLE),
              .DSTEP2(DSTEP2 && HAS_SS), .FOLLOW(FOL), .QB(QB), .AW(AW),
-             .ICACHE(ICACHE), .IC_LINES(IC_LINES), .IC_PF(IC_PF), .QONCE(QONCE)) u_seq (
+             .ICACHE(ICACHE), .IC_LINES(IC_LINES), .IC_PF(IC_PF), .QONCE(QONCE), .FP16(FP16)) u_seq (
     .clk, .rst(srst), .ucmd(ucmd_s), .ustart(ustart_s), .urel, .ufol(ufol_s), .urdy(urdy_s),
     .udone(udone_s),
     .halted(sq_halted), .error(sq_err),
@@ -710,6 +711,79 @@ module otpu_slice
     .act_busy(q_actwv), .act_we(la_we), .act_row(la_row), .act_idx(la_idx), .act_data(la_data),
     .asc_we(la_swe), .asc_row(la_srow), .asc_blk(la_sblk), .asc_data(la_sdata));
 
+  // FP16 shares the MXU execution slot and TMEM ports. The first integration
+  // serializes this slot while FP16 is enabled: switching paths cannot pass a
+  // queued integer command or its pending epilogue writes. FP16=0 keeps the
+  // original integer queue and interfaces unchanged.
+  logic im_start, im_go, im_rdy, im_done, im_lost;
+  logic [ULANES-1:0] im_ren, im_wen;
+  logic [ULANES-1:0][31:0] im_raddr, im_waddr, im_wdata;
+  logic [LANES-1:0] im_rben;
+  logic [LANES-1:0][31:0] im_rbad;
+  if (FP16) begin : g_half
+    logic busy, sel, h_rdy, h_done, rv, pending;
+    cmd_t hcmd;
+    logic [ULANES-1:0] hr, hw, rq;
+    logic [ULANES-1:0][31:0] ha, wa, wd, ad, data_q;
+    typedef enum logic [1:0] {R_IDLE, R_ASK, R_REPLAY, R_DATA} rs_t;
+    rs_t rs;
+    wire half_cmd = ucmd[U_MXU].op == OP_HMM || ucmd[U_MXU].op == OP_HCVT;
+    assign im_start = ustart[U_MXU] && !half_cmd;
+    assign im_go = urel && !sel;
+    assign r_mxu = !busy && h_rdy && im_rdy;
+    assign d_mxu = im_done || h_done;
+    assign im_lost = tm_lost[P_MXU] && !sel;
+    otpu_hmxu #(.N(ULANES)) u_half (
+      .clk, .rst(rst_mxu), .start(pending && urel), .cmd(hcmd),
+      .rdy(h_rdy), .done(h_done), .r_req(hr), .r_addr(ha), .r_ready(rs == R_IDLE),
+      .r_valid(rv), .r_data(data_q), .w_req(hw), .w_addr(wa), .w_data(wd), .w_ready(gnt[G_MXU])
+    );
+    always_ff @(posedge clk) begin
+      if (rst_mxu) begin
+        busy <= 1'b0; sel <= 1'b0; pending <= 1'b0; rs <= R_IDLE; rv <= 1'b0; rq <= '0;
+      end
+      else begin
+        rv <= 1'b0;
+        if (pending && urel) pending <= 1'b0;
+        if (d_mxu) begin busy <= 1'b0; sel <= 1'b0; end
+        if (ustart[U_MXU]) begin
+          busy <= 1'b1; sel <= half_cmd; pending <= half_cmd; hcmd <= ucmd[U_MXU];
+        end
+        case (rs)
+          R_IDLE: if (|hr) begin ad <= ha; rq <= hr; rs <= R_ASK; end
+          R_ASK: if (|r_en[P_MXU]) begin
+            rq <= '0; rs <= tm_lost[P_MXU] ? R_REPLAY : R_DATA;
+          end
+          R_REPLAY: if (!tm_lost[P_MXU]) rs <= R_DATA;
+          R_DATA: begin data_q <= r_data[P_MXU][ULANES-1:0]; rv <= 1'b1; rs <= R_IDLE; end
+        endcase
+      end
+    end
+    assign mxu_ren = sel ? rq : im_ren;
+    assign mxu_raddr = sel ? ad : im_raddr;
+    assign mxu_wen = sel ? hw : im_wen;
+    assign mxu_waddr = sel ? wa : im_waddr;
+    assign mxu_wdata = sel ? wd : im_wdata;
+    always_comb begin
+      rq_b[P_MXU] = im_rben; r_bad[P_MXU] = im_rbad;
+      if (sel) begin
+        rq_b[P_MXU] = '0; r_bad[P_MXU] = '0;
+        for (int l = 0; l < ULANES; l++) if (rq[l]) begin
+          rq_b[P_MXU][ad[l][BW-1:0]] = 1'b1;
+          r_bad[P_MXU][ad[l][BW-1:0]] = ad[l];
+        end
+      end
+    end
+  end else begin : g_nohalf
+    assign im_start = ustart[U_MXU];
+    assign im_go = urel;
+    assign im_lost = tm_lost[P_MXU];
+    assign r_mxu = im_rdy, d_mxu = im_done;
+    assign mxu_ren = im_ren, mxu_raddr = im_raddr;
+    assign mxu_wen = im_wen, mxu_waddr = im_waddr, mxu_wdata = im_wdata;
+    assign rq_b[P_MXU] = im_rben, r_bad[P_MXU] = im_rbad;
+  end
+
   otpu_mxu #(.D(D), .MCOLS(MCOLS), .ROWS(ACT_ROWS), .DEPTH(FIFO_DEPTH), .LANES(ULANES), .IMPL(MXU_IMPL),
              .CL(MXU_CL), .E(MXU_E), .QD(MXU_QD), .WG(WG), .AB((WG > 1) ? CB : 32), .TQ(MXU_TQ), .SID(SID),
              .RF_STYLE(MXU_RF_STYLE), .FIFO_STYLE(MXU_FIFO_STYLE), .WASK(MXU_WASK),
@@ -717,7 +791,7 @@ module otpu_slice
              .XPOST(XPOST), .QB(XQB),
              .CHASH(CHASH), .KT(KT), .SPL(MXU_SPL != 0),
              .TLANES(LANES), .DAW(AW)) u_mxu (
-    .clk, .clk_f, .rst(rst_mxu), .start(ustart[U_MXU]), .go(urel), .cmd(ucmd[U_MXU]), .rdy(r_mxu), .done(d_mxu),
+    .clk, .clk_f, .rst(rst_mxu), .start(im_start), .go(im_go), .cmd(ucmd[U_MXU]), .rdy(im_rdy), .done(im_done),
     .computing(mxu_pop), .pf_level(mxu_level), .pf_starve(mxu_starve), .pf_block(mxu_block),
     .pf_u(mxu_u), .pf_uv(mxu_uv),
     .act_blk(act_rblk), .act_blk2(act_rblk2), .act_hi(act_rhi), .act_grp(act_rgrp), .act_ren, .act_data(act_rdata), .act_scale(act_rscale),
@@ -729,9 +803,9 @@ module otpu_slice
     .w_bd(pw_bd[WG*D*8-1:0]),
     .w_slot(pw_slot), .w_one(pw_one), .p_clk, .p_we(p_we[WG-1:0]), .p_q(p_q[WG-1:0]),
     .p_slot(p_slot[WG-1:0]), .p_d(p_d[WG-1:0]), .p_cnt(p_cnt[WG-1:0]),
-    .t_ren(mxu_ren), .t_raddr(mxu_raddr), .t_rdata(r_data[P_MXU][ULANES-1:0]),
-    .t_wen(mxu_wen), .t_waddr(mxu_waddr), .t_wdata(mxu_wdata), .t_gnt(gnt[G_MXU]),
-    .t_lost(tm_lost[P_MXU]), .t_rben(rq_b[P_MXU]), .t_rbad(r_bad[P_MXU]));
+    .t_ren(im_ren), .t_raddr(im_raddr), .t_rdata(r_data[P_MXU][ULANES-1:0]),
+    .t_wen(im_wen), .t_waddr(im_waddr), .t_wdata(im_wdata), .t_gnt(gnt[G_MXU]),
+    .t_lost(im_lost), .t_rben(im_rben), .t_rbad(im_rbad));
 
   // the quantizer's group maxes of a row (MX offsets; not ROW mode): a QACT's 4 KB (KB <=
   // ACT_BLOCKS: the ACT RAM's bound) and a QST's KB (its row in TMEM: KB <= TMEM_WORDS / D), so

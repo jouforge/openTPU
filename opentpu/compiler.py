@@ -318,6 +318,19 @@ class Tensor:
 
 
 @dataclass
+class HalfTensor:
+    """Binary16 DRAM view. Rows start on whole words; distinct from ST16 state."""
+    storage: Tensor
+
+    @property
+    def shape(self):
+        return self.storage.shape
+
+    def __getitem__(self, key):
+        return HalfTensor(self.storage[key])
+
+
+@dataclass
 class QTensor:
     """A weight matrix [rows, cols] in an MXU format -- the MXU's streamed operand: element rows
     rs bytes apart and a scale row per row, srs bytes apart (docs/isa.md "Weight formats": the
@@ -722,6 +735,21 @@ def _span(k: slice, n: int) -> tuple:
     if e <= a:
         raise CompileError(f"an empty tile view ({k} of {n})")
     return a, e
+
+
+@dataclass
+class HalfTile:
+    """Packed binary16 TMEM words with a logical element shape; owns its allocation."""
+    storage: "Tile"
+    shape: tuple
+
+    @property
+    def base(self):
+        return self.storage.base
+
+    @property
+    def rs(self):
+        return self.storage.rs
 
 
 class Tile:
@@ -2035,6 +2063,85 @@ class Builder:
         return out
 
     # ---- data movement
+    def _half_shape(self, shape):
+        if not self.cfg.FP16:
+            raise CompileError("FP16 instructions require Config.FP16")
+        if len(shape) not in (1, 2) or any(not 0 < n <= 65535 for n in shape):
+            raise CompileError("FP16 tiles must be nonempty 1-D or 2-D, dimensions <= 65535")
+
+    def _half_live(self, x, cls):
+        if not isinstance(x, cls):
+            raise CompileError(f"FP16 operation requires {cls.__name__}")
+        t = x.storage if isinstance(x, HalfTile) else x
+        if t.b is not self:
+            raise CompileError("FP16 operand belongs to another builder")
+        self.check_live(t)
+        self._half_shape(x.shape)
+
+    def _half_alloc(self, shape):
+        words = (shape[-1] + 1) // 2
+        return HalfTile(self.alloc((*shape[:-1], words)), tuple(shape))
+
+    def pack_fp16(self, x: Tile) -> HalfTile:
+        self._half_live(x, Tile)
+        out = self._half_alloc(x.shape)
+        for r in builtins.range(x.rows):
+            self.emit(I.hcvt(out.base + r * out.rs, x.base + r * x.rs, x.cols,
+                             comment="pack fp16"))
+        return out
+
+    def unpack_fp16(self, x: HalfTile) -> Tile:
+        self._half_live(x, HalfTile)
+        out = self.alloc(x.shape)
+        for r in builtins.range(out.rows):
+            self.emit(I.hcvt(out.base + r * out.rs, x.base + r * x.rs, out.cols,
+                             unpack=True, comment="unpack fp16"))
+        return out
+
+    def load_fp16(self, desc: HalfTensor) -> HalfTile:
+        if not isinstance(desc, HalfTensor):
+            raise CompileError("load_fp16 requires a HalfTensor (HalfInput)")
+        t = desc.storage
+        self._half_shape(t.shape)
+        base = Affine.of(t.base)
+        if t.esize != 2 or t.strides[-1] != 1 or base.const % 4 or \
+                any(c % 4 for c in base.terms.values()) or \
+                (len(t.shape) == 2 and t.strides[0] % 2):
+            raise CompileError("load_fp16 requires contiguous elements and word-aligned rows")
+        out = self._half_alloc(t.shape)
+        rows = t.shape[0] if len(t.shape) == 2 else 1
+        for r in builtins.range(rows):
+            ra, imm = self.addr(base + r * 2 * t.strides[0])
+            self.emit(I.ld(imm, out.base + r * out.rs, (t.shape[-1] + 1) // 2,
+                           ra=ra, comment="load fp16 row"))
+        return out
+
+    def matmul_fp16(self, a: HalfTile, b: HalfTile, acc: Tile | None = None) -> Tile:
+        self._half_live(a, HalfTile)
+        self._half_live(b, HalfTile)
+        if len(a.shape) != 2 or len(b.shape) != 2 or a.shape[1] != b.shape[0]:
+            raise CompileError("matmul_fp16 requires [M, K] and [K, N] HalfTiles")
+        m, k = a.shape
+        n = b.shape[1]
+        if acc is not None:
+            self._half_live(acc, Tile)
+            if acc.shape != (m, n):
+                raise CompileError("matmul_fp16 accumulator shape must be [M, N]")
+            # HMM forbids any source/destination overlap, including row padding.
+            for x in (a, b):
+                end = x.base + (x.shape[0] - 1) * x.rs + (x.shape[1] + 1) // 2
+                if acc.base < end and x.base < acc.base + (m - 1) * acc.rs + n:
+                    raise CompileError("matmul_fp16 operands overlap the accumulator")
+            # Drain an EXP2SUB sum before overwriting its values. Its FIFO entry
+            # must be taken even when the old sum is no longer wanted.
+            if acc.rowsum is not None:
+                self.reduce(I.V_RSUM, acc, axis=1)
+            self.bump_version(acc.buf)
+        out = acc if acc is not None else self.alloc((m, n))
+        self.emit(I.hmm(out.base, a.base, b.base, m, n, k, a.rs, b.rs, out.rs,
+                       acc=acc is not None, comment="matmul fp16"))
+        return out
+
     def load(self, t: Tensor, out: Tile | None = None) -> Tile:
         if not t.shape:
             raise CompileError("cannot load a scalar")

@@ -96,3 +96,8 @@ csr_offset = 1048576            # 1 MiB into BAR2; the AMR GPIO stays at 0x20000
 csr_bytes = 1048576
 # No sim_* rate/latency/refresh settings: functional simulation only until the memory path
 # has been characterized. Do not infer HBM throughput from the default native-memory model.
+
+# Experimental native binary16 instructions and compiler tiles (docs/fp16.md).
+# This is not yet a qualified full FP16 model/board image; the default stays INT8/MX.
+[variants.fp16]
+FP16 = true

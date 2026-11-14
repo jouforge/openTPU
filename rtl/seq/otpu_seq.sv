@@ -94,7 +94,8 @@ module otpu_seq
   parameter int IC_PF      = 2,       // ICACHE: the lines prefetched ahead of fa's (1 .. 4)
   // quantize-once (Config.QONCE; docs/isa.md "Quantize once"; otpu_pkg QO): QACT flag ST (w3 +=
   // R[rc]: its DRAM rows) and LDA (otpu_dma LDA: w1 += R[ra], w2 and w3 immediates)
-  parameter bit QONCE      = 1'b0
+  parameter bit QONCE      = 1'b0,
+  parameter bit FP16       = 1'b0     // HMM / HCVT (docs/fp16.md)
 ) (
   input  logic                clk,
   input  logic                rst,
@@ -258,6 +259,9 @@ module otpu_seq
     logic w0;
     s = '0; a = '0; t0 = '0; t1 = '0; t2 = '0; t3 = '0; t4 = '0; h = '0; w0 = 1'b0;
     case (op)
+      OP_HMM, OP_HCVT: begin
+        t0 = f.wr[0]; w0 = 1'b1; t1 = f.rd[0]; t2 = f.rd[1];
+      end
       OP_LD: begin
         s.d[0] = r32(f.rd[0]); t0 = f.wr[0]; w0 = 1'b1;
       end
@@ -600,7 +604,7 @@ module otpu_seq
   wire  rel6 = is_str || (WG > 1 && op == OP_QST && flags[2]);
   wire  rel2 = (op != OP_QACT) && !(QONCE && op == OP_LDA);
   wire  rel3 = !((op == OP_QACT && !(QONCE && flags[6])) || op == OP_LD || op == OP_ST ||
-                 op == OP_GATHER || (QONCE && op == OP_LDA));
+                 op == OP_GATHER || op == OP_HCVT || (QONCE && op == OP_LDA));
   logic [AW-1:0] a1, a2, a3;
   always_comb begin
     dcmd.op = op; dcmd.flags = flags;
@@ -618,7 +622,8 @@ module otpu_seq
     dcmd.w7 = iw[7] + ((op == OP_VOP) ? rv32(rd) : 32'd0);
   end
   int dunit;
-  always_comb dunit = ((!STREAMS && (op == OP_DSTEP || op == OP_STREAM)) || (!QONCE && op == OP_LDA))
+  always_comb dunit = ((!STREAMS && (op == OP_DSTEP || op == OP_STREAM)) || (!QONCE && op == OP_LDA) ||
+                      (!FP16 && (op == OP_HMM || op == OP_HCVT)))
                       ? -1 : unit_of(op);
 
   // ---- dispatch pipeline: R (the instruction at pc: registers resolved) -> P (footprint
