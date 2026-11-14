@@ -218,3 +218,33 @@ Evidence: `build/perf_v80/pipeline-rtl.json`, `pipeline/hdot-overlap.log` and
 `pipeline-ooc/`. RTL/runtime source hashes in the isolated benchmark match the
 main checkout. The matching OOC sources/reports/checkpoints are retained on
 qfpga0 under `pipeline-src/` and `pipeline-ooc/` in the performance build root.
+
+## Candidate validation and full implementation
+
+The combined hardware source is `913a298d`. Its focused regression passes all
+44 tests: FP16 instructions, HMM reset/backpressure at three lane counts,
+mixed-precision execution, a complete small mixed model on native AXI including
+reset/replay, a larger native FP16 matrix tile, HDQ reset, and floating-point
+arithmetic. The isolated test checkout matches all 475 tracked RTL, runtime and
+test files in this revision. Evidence: `build/perf_v80/pipeline-regression.log`
+and `pipeline-source-review.json`.
+
+```bash
+python -m pytest -q tests/test_fp16_isa.py tests/test_mixed.py \
+  tests/test_qwen35_mixed.py::test_model_native_rtl \
+  tests/test_fp16_tiled.py::test_model_tile_native_memory \
+  tests/test_int4_isa.py::test_decode_reset_rtl tests/test_fp16.py
+```
+
+The full V80 build uses a clean, detached copy of `913a298d` at
+`/home/pqq/workspace/openTPU-perf-build/full-v1/src`. All 53 hardware inputs match
+the generated manifest; only `otpu_hmxu.sv` and `otpu_hdot.sv` differ from the
+qualified mixed image's hardware inputs. Clocks remain 100/200 MHz and the
+architecture hash remains `154f92b2`; the new build ID is `913a298d`.
+
+Full implementation, export/CDC review and matching AMC packaging are still
+pending. Physical qualification will then check the complete 32 GiB memory,
+HMM and HDQ interruption/recovery, legacy INT8, all five model policies, and
+same-clock projection/model profiles against the retained baseline. The card
+still runs the old qualified image. No physical speedup or completed resource,
+frequency or scale optimization is claimed for this candidate yet.
