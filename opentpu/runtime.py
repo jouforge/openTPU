@@ -3,6 +3,8 @@
 Host arguments:
   Input(a)            fp32 array replicated into every slice's DRAM   -> Tensor
   HalfInput(a)        binary16, word-padded rows in each slice's DRAM  -> HalfTensor
+  HalfWeight(w, shard=0)  fp32 [N, K] stored as binary16 [K, N], optionally
+                      sharded by output columns over slices         -> HalfTensor
   Weight(w, shard=0, fmt="int8")  fp32 [N, K] quantized to int8 + per-D-block scales (or 4-bit:
                       fmt="int4" | "fp4"), optionally sharded
                       over slices by rows (shard=0) or columns (shard=1) -> QTensor
@@ -47,6 +49,22 @@ class HalfInput:
 class Output:
     def __init__(self, shape):
         self.shape = tuple(shape)
+
+
+class HalfWeight:
+    """Linear weights [N, K], rounded once and transposed for native HMM's [K, N].
+
+    shard=0 partitions N over slices; None replicates the weights. K is never
+    partitioned: every output accumulates in the same increasing K order.
+    """
+
+    def __init__(self, array, shard: int | None = None):
+        a = np.asarray(array, dtype=np.float32)
+        if a.ndim != 2 or any(n == 0 for n in a.shape):
+            raise ValueError("HalfWeight must be nonempty 2-D [N, K]")
+        if shard not in (None, 0):
+            raise ValueError("HalfWeight shard must be None or 0 (output rows)")
+        self.array, self.shard = a, shard
 
 
 class Weight:
@@ -126,8 +144,8 @@ class Layout:
 
 def place(cfg: Config, args: dict, weights_at: int | None = None) -> tuple[_Dram, Layout, list]:
     """Lay out host args in DRAM. Returns images, layout and per-slice bound kernel arguments.
-    weights_at: the Weights from that byte address on (an image's weights above 4 GiB, AW >
-    32), the rest from 0."""
+    weights_at: Weight / HalfWeight allocations from that byte address on (an image's
+    weights above 4 GiB, AW > 32), the rest from 0."""
     S, D = cfg.S, cfg.D
     dram = _Dram(S, cfg.DRAM_BYTES, weights_at)
     layout = Layout()
@@ -150,6 +168,22 @@ def place(cfg: Config, args: dict, weights_at: int | None = None) -> tuple[_Dram
             layout.params[name] = (a, addr)
             strides = (a.array.shape[-1], 1) if len(a.shape) == 2 else (1,)
             desc = HalfTensor(Tensor(Affine(addr), a.shape, strides, a, esize=2))
+            for s in range(S):
+                bound[s][name] = desc
+        elif isinstance(a, HalfWeight):
+            if not cfg.FP16:
+                raise ValueError("HalfWeight requires Config.FP16")
+            n, k = a.array.shape
+            if a.shard == 0 and n % S:
+                raise ValueError(f"{name}: {n} rows not divisible by {S} slices")
+            nloc = n // S if a.shard == 0 else n
+            stride = (nloc + 1) // 2 * 2
+            addr = dram.alloc(2 * k * stride, high=True)
+            for s in range(S):
+                part = a.array[s * nloc:(s + 1) * nloc] if a.shard == 0 else a.array
+                dram.put(s, addr, HalfInput(part.T).array)
+            layout.params[name] = (a, addr)
+            desc = HalfTensor(Tensor(Affine(addr), (k, nloc), (stride, 1), a, esize=2))
             for s in range(S):
                 bound[s][name] = desc
         elif isinstance(a, Output):

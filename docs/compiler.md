@@ -12,7 +12,7 @@ is its layout, and changing layout is an instruction.
 | `Tensor` | DRAM fp32, row-major with a row stride | runtime `Input`/`Output` | `ol.load`, `ol.store` |
 | `QTensor` | DRAM rows in an MXU format (`wf`: int8, int4, fp4, nvfp4) plus a scale row per row: its fp32 Sw, then its blocks' offsets (docs/quant.md "The MX formats"); `k0` the first block a column slice reads, `rsc` Sw alone (the K cache at d = D) | runtime `Weight`, KV cache views | the streamed operand of `ol.dot` |
 | `Tile` | TMEM fp32, base + shape + row stride | load, VPU ops, dot | VPU ops, quantize, store |
-| `HalfTensor` | DRAM binary16, word-aligned padded rows | runtime `HalfInput` | `ol.load_fp16` |
+| `HalfTensor` | DRAM binary16, word-aligned padded rows | runtime `HalfInput`, `HalfWeight` | `ol.load_fp16` |
 | `HalfTile` | TMEM binary16, two elements per word | `ol.load_fp16`, `ol.pack_fp16` | `ol.matmul_fp16`, `ol.unpack_fp16` |
 | `Stationary` | ACT RAM int8 rows plus a scale per row and QACT range and offsets per D/4 (`qranges`) | `ol.quantize` | the stationary operand of `ol.dot` |
 | `Bcast` | a view of a 1-D tile as a column or row | `v[:, None]`, `v[None, :]` | VPU B-operand modes |
@@ -33,9 +33,14 @@ Layout transitions are the data movement:
 | `ol.all_reduce(x)` | `GATHER` + `VOP` adds | every slice gets the sum of all slices' `x` |
 | `ol.kv_append(kv, h, pos, k, v)` | two `QST` | TMEM fp32 to DRAM int8 in the cache layouts |
 
-The binary16 APIs require `Config.FP16`; they operate on explicit tiles that fit
-TMEM and do not yet provide automatic model matrix tiling. See the [FP16 contract
-and integration status](fp16.md) for layouts, rounding and current limitations.
+The binary16 language APIs require `Config.FP16` and operate on explicit tiles
+that fit TMEM. `opentpu.kernels.fp16.matmul` tiles DRAM matrices in M/N/K with
+hardware loops and an FP32 accumulator carried across K. `HalfWeight` accepts
+conventional `[N,K]` weights, transposes/packs them as `[K,N]`, and can partition
+output columns across slices. `kernels.fp16.swiglu` composes three projections
+with FP32 SiLU/product and caller-owned DRAM scratch. These building blocks do
+not yet replace the model engine's quantized paths. See the [FP16 contract and
+integration status](fp16.md) for layouts, rounding and current limitations.
 
 The KV cache (`compiler.KVDesc`): K token-major `[cap, d]` with a scale row per token
 (`k_scale_bytes`: its fp32 scale at d = D, read by MM RSC; else an int8 scale row); V transposed,
