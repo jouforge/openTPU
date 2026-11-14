@@ -194,9 +194,13 @@ def test_full_model_engine_and_reset(have_verilator, backend):
     else:
         be = "isa"
     eng = Engine(spec, W, cfg=cfg, cap=8, prog_cache=False, backend=be)
+    recorded = []
+    eng.backend.record_token = recorded.append
     tokens = [3, 9, 12] if backend == "isa" else [3, 9]
     want = model_reference(spec, W, tokens, 8)
     got = [eng.step(t) for t in tokens]
+    assert recorded == [s["cycles"] for s in eng.stats]
+    assert eng.image.kv_bytes == sum(n for _, n in eng.image.mutable) > 0
     np.testing.assert_array_equal(F.bits(got), F.bits(want))
     if backend != "isa":
         return

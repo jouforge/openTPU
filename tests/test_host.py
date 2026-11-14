@@ -1099,6 +1099,29 @@ def test_dstep_programs_need_a_dstep_bitstream(run_dir):
 
 
 # ------------------------------------------------------------------------------ status file
+def test_staged_status_counts_complete_tokens(run_dir):
+    from types import SimpleNamespace
+    cfg = board_config(DRAM_BYTES=1 << 21)
+    card = FakeTransport(devname="staged", cycles=2_000_000)
+    be = BoardBackend(cfg, [np.zeros(1 << 16, np.uint8)], transport=card)
+    eng = SimpleNamespace(staged=True, poss=[0],
+                          image=SimpleNamespace(cap=8, batch=1, kv_bytes=4096))
+    be.attach(eng)
+    try:
+        be.status.min_interval = 0
+        stats = [be.run([PROG]) for _ in range(3)]
+        assert read_status("staged")["tokens"] == 0
+        eng.poss[0] += 1
+        be.record_token(sum(s["cycles"] for s in stats))
+        st = read_status("staged")
+        assert st["tokens"] == 1 and st["last_cycles"] == 6_000_000
+        assert st["tok_s_device"] == pytest.approx(100e6 / 6e6)
+        assert st["dram"]["kv_used"] == 512
+    finally:
+        be.close()
+    assert read_status("staged") is None
+
+
 def test_status_file_lifecycle(run_dir):
     from opentpu import lens as L
     from opentpu.host.board import sim_config

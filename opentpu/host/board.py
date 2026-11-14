@@ -2844,9 +2844,15 @@ class BoardBackend:
             self._t0s.setdefault(self._key, collections.deque(maxlen=RUN_CLOCK_N)).append(
                 st["cycles"] / (khz * 1e3) * self._ratio)
         self.last = (programs, st)
-        if self.status is not None:
+        if self.status is not None and not getattr(self.engine, "staged", False):
             self.status.token(st["cycles"], khz, dram=self._layout(True))
         return st
+
+    def record_token(self, cycles: int) -> None:
+        """A staged engine's complete token, after it advances its position. Individual
+        stage runs do not publish token rates; the engine supplies their total cycles."""
+        if self.status is not None:
+            self.status.token(cycles, self.info["core_khz"], dram=self._layout())
 
     def _serve(self) -> None:
         """Serve the host hook until the run halts (not on the board model, which runs a

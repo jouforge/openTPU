@@ -456,6 +456,7 @@ class Image:
                 if n in names:
                     arg, addr = self.layout.params[names[n]]
                     self.mutable.append((addr, arg.array.nbytes))
+        self.kv_bytes = sum(nbytes for _, nbytes in self.mutable)
         self.layers = [{n: bound[0][name] for n, name in names.items()} for names in self.layer_names]
         for layer in self.layers:
             layer.update(x=self.bound["x"], out=self.bound["mixed"])
@@ -500,6 +501,7 @@ class Engine:
     """Native FP16 text engine using the existing ISA/board backend contract."""
 
     can_generate = False
+    staged = True
     snapshot_bytes = 0
     batch = rows = 1
 
@@ -565,6 +567,8 @@ class Engine:
         logits = self.backend.read(0, addr, 4 * self.spec.vocab).view("<f4").copy()
         if not np.isfinite(logits).all():
             raise RuntimeError("native FP16 model produced nonfinite logits")
+        if hasattr(self.backend, "record_token"):
+            self.backend.record_token(total["cycles"])
         if sink is not None:
             sink.begin(self.spec.vocab)
             sink.feed(0, logits)
