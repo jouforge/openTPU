@@ -172,7 +172,7 @@ def test_half_raw_encodings_and_reused_buffers(have_verilator, tmp_path, wc, ban
     rng = np.random.default_rng(1635)
     img = np.zeros(cfg.DRAM_BYTES, np.uint8)
     p, at = [], 0
-    for case, k in enumerate([1, 2, 7, 16, 31, 65, 3, 9]):
+    for case, k in enumerate([1, 2, 7, 16, 31, 65, 3, 17]):
         m, n = int(rng.integers(1, 6)), int(rng.integers(1, 24))
         ars, brs, ors = (k + 1) // 2 + 2, (n + 1) // 2 + 1, n + 3
         a = rng.integers(0, 65536, (m, ars * 2), np.uint16)
@@ -198,3 +198,13 @@ def test_half_raw_encodings_and_reused_buffers(have_verilator, tmp_path, wc, ban
                               max_cycles=1000000)
     np.testing.assert_array_equal(tmem[0], ref.tmem)
     np.testing.assert_array_equal(dram[0], ref.dram)
+
+
+@pytest.mark.parametrize("lanes", [2, 8, 16])
+def test_half_activation_reuse_reset_rtl(have_verilator, lanes):
+    exe = rtlsim.build("tb_hmm", [rtlsim.RTL / "vpu/otpu_fp.sv", rtlsim.RTL / "vpu/otpu_fpipe.sv",
+        rtlsim.RTL / "top/otpu_pkg.sv", rtlsim.RTL / "mxu/otpu_hdot.sv",
+        rtlsim.RTL / "mxu/otpu_hmxu.sv", rtlsim.TB / "tb_hmm.sv"], {"N": lanes})
+    result = rtlsim.run_sim([str(exe)], timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "HMM reset/restart cases=100 errors=0" in result.stdout

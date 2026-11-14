@@ -3,6 +3,9 @@
 // one memory read in flight. The enclosing slice arbitrates complete read/write
 // beats; responses may be delayed, and writes remain stable until accepted.
 // Reads of a packed row start at its low halfword; odd padding is never used.
+// HMM reads up to N activation words at once and reuses the write staging beat
+// until their 2*N K steps finish. The seed has separate ownership; only RESULT
+// overwrites the activation beat with outputs. No extra activation RAM is needed.
 module otpu_hmxu
   import otpu_pkg::*;
   import otpu_fp::*;
@@ -38,6 +41,8 @@ module otpu_hmxu
   logic [N-1:0][3:0] code_q;
   hmul_mid_t dq_mid [N];
   logic di_ready, do_valid;
+  localparam int AK = $clog2(2*N);
+  wire [31:0] knext = kk + 1;
   // INT4 is exact in half. Keep the integer sign and multiply the half scale
   // before a single final half rounding; -8 is defined although packing emits -7..7.
   function automatic f16_t i4h(input logic [3:0] q);
@@ -61,7 +66,10 @@ module otpu_hmxu
       SEED_R: for (int j = 0; j < N; j++) begin
         r_req[j] = 32'(j) < cm; r_addr[j] = dst + col + 32'(j);
       end
-      A_R: begin r_req[0] = 1'b1; r_addr[0] = abase + (kk >> 1); end
+      A_R: for (int j = 0; j < N; j++) begin
+        r_req[j] = 32'(2*j) < k - kk;
+        r_addr[j] = abase + (kk >> 1) + 32'(j);
+      end
       B_R: for (int j = 0; j < N; j++) begin
         r_req[j] = 32'(j) < ((cm + 1) >> 1);
         r_addr[j] = bbase + (col >> 1) + 32'(j);
@@ -130,7 +138,9 @@ module otpu_hmxu
           st <= k == 0 ? WRITE : A_R;
         end
         A_R: if (r_ready) st <= A_D;
-        A_D: if (r_valid) begin a <= kk[0] ? r_data[0][31:16] : r_data[0][15:0]; st <= B_R; end
+        A_D: if (r_valid) begin
+          data_q <= r_data; a <= r_data[0][15:0]; st <= B_R;
+        end
         B_R: if (r_ready) st <= B_D;
         B_D: if (r_valid) begin
           for (int j = 0; j < N; j++)
@@ -138,8 +148,15 @@ module otpu_hmxu
           st <= DOT;
         end
         DOT: if (di_ready) begin
-          if (kk + 1 == k) st <= RESULT;
-          else begin kk <= kk + 1; bbase <= bbase + brs; st <= A_R; end
+          if (knext == k) st <= RESULT;
+          else begin
+            kk <= knext; bbase <= bbase + brs;
+            if (knext[AK-1:0] == 0) st <= A_R;
+            else begin
+              a <= knext[0] ? data_q[knext[AK-1:1]][31:16] : data_q[knext[AK-1:1]][15:0];
+              st <= B_R;
+            end
+          end
         end
         RESULT: if (do_valid) begin
           for (int j = 0; j < N; j++) data_q[j] <= y[j];
