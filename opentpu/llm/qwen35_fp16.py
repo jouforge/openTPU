@@ -396,8 +396,9 @@ def _shape_weights(spec):
 
 
 class Image:
-    """Single-slice dense Qwen3.5 W16A16, one shared persistent DRAM image.
+    """Single-slice dense Qwen3.5, one shared persistent DRAM image.
 
+    Projections use W16A16 unless an explicit matrix policy selects other modes.
     Each sublayer is a separate device program so the full model does not need
     to fit IMEM. Only embeddings and position tables are supplied by the host;
     every projection, normalization, nonlinearity and recurrent update executes
@@ -422,6 +423,9 @@ class Image:
                 raise ValueError("precision policy layer count differs from checkpoint")
             self.wformat, self.head_format = policy.mode, policy.head
             self.formats = policy.label
+            self.matrix_modes = frozenset([policy.head] + [policy(name, i)
+                for i, kind in enumerate(spec.kinds)
+                for name in (("wq", "wk", "wv", "wo") if kind == "attn" else ("delta",)) + ("gateup", "down")])
         # A 128-column K-major tile uses 8K TMEM words and full memory beats.
         # Smaller test targets retain the 32-column tile; K order is identical.
         self.block = (1, 128, 128) if cfg.TMEM_WORDS >= 16384 else (1, 32, 32)
@@ -517,7 +521,7 @@ class Image:
 
 
 class Engine:
-    """Native FP16 text engine using the existing ISA/board backend contract."""
+    """Staged text engine with FP16 attention and explicit projection precision."""
 
     can_generate = False
     staged = True

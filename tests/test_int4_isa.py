@@ -104,3 +104,15 @@ def test_decode_reset_rtl(have_verilator, lanes):
     result = rtlsim.run_sim([str(exe)], timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "HDQ reset/restart cases=100 errors=0" in result.stdout
+
+
+def test_board_diagnostic_programs():
+    from opentpu.host.opchecks import diag_image, op_checks, OUT
+    cfg = target.config("v80:mixed", DRAM_BYTES=1 << 23)
+    image = diag_image(cfg)
+    checks = [(n, p) for g, n, p in op_checks(cfg) if g == "w4a16"]
+    assert len(checks) == 2
+    assert not any(g == "w4a16" for g, _, _ in op_checks(replace(cfg, W4A16=False)))
+    for name, program in checks:
+        result = Machine(cfg, [program], [image.copy()]).run().slices[0].dram
+        assert np.any(result[OUT:OUT + 64]), name

@@ -157,3 +157,10 @@ def test_chat_precision_cli(tmp_path, monkeypatch, capsys):
                  ["--precisions", "mlp=w4a16"], ["--head-precision", "w8a8"]):
         with pytest.raises(SystemExit):
             C.main(base + args)
+
+
+def test_shadowed_mode_does_not_require_unused_capability():
+    spec, weights, cfg = fixture()
+    policy = Policy(2, "w4a16", "delta=w16a16,attn=w16a16,mlp=w16a16,head=w16a16")
+    img = Image(spec, replace(cfg, W4A16=False), 8, policy=policy)
+    assert img.matrix_modes == {"w16a16"}

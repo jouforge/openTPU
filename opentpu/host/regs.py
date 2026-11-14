@@ -174,12 +174,12 @@ def caps2(v: int | None) -> dict:
     no split LO flag (splitq False), no one-sided ST16 (st16s False), no QACT HL (qhl
     False), no QST HL (qsthl False), no SIGMOID / SILU (vsig False), no VOP MAC (vmac False), no
     OUTER decay one on MAC's (outer1 False), no QACT ST / LDA (qonce False), no MM SPL (splmm
-    False), no native FP16 (fp16 False)."""
+    False), no native FP16 (fp16 False) or packed INT4 decode (w4a16 False)."""
     if v is None:
         return {"gather": True, "outer": True, "dstep2": False, "se_own": False, "bmc": False,
                 "kt": False, "bhw": 0, "icache": False, "st16": "", "xcard": False,
                 "fsum": False, "splitq": False, "st16s": False, "qhl": False, "qsthl": False,
-                "vsig": False, "vmac": False, "outer1": False, "qonce": False, "splmm": False, "fp16": False}
+                "vsig": False, "vmac": False, "outer1": False, "qonce": False, "splmm": False, "fp16": False, "w4a16": False}
     st = v >> CAP2_ST16_SHIFT & CAP2_ST16_MASK
     return {"gather": bool(v & CAP2_GATHER), "outer": not v & CAP2_NO_OUTER,
             "dstep2": bool(v & CAP2_DSTEP2), "se_own": bool(v & CAP2_SE_OWN),

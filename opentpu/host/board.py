@@ -2646,9 +2646,15 @@ class BoardBackend:
         img = getattr(engine, "image", None)
         fmts = {getattr(img, "wformat", "int8"), getattr(img, "head_format", "int8")}
         caps = self.info.get("caps") or {}
-        if "fp16" in fmts and not _fp16(self.info):
+        modes = getattr(img, "matrix_modes", None)
+        if modes is not None:
+            fmts = set(modes)
+        if fmts.intersection({"fp16", "w16a16", "w8a8", "w4a16"}) and not _fp16(self.info):
             self.board.close()
             raise ConfigMismatch("the model image needs native FP16 HMM / HCVT (CAPS2 bit26)")
+        if "w4a16" in fmts and not _w4a16(self.info):
+            self.board.close()
+            raise ConfigMismatch("the model image needs packed INT4 decode HDQ (CAPS2 bit27)")
         if fmts.intersection({"int4", "fp4", "nvfp4"}) and not caps.get("w4"):
             self.board.close()
             raise ConfigMismatch("the model image has 4-bit weights and this bitstream's MXU "

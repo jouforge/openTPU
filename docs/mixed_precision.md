@@ -67,6 +67,9 @@ policy = Policy(24, mode="w16a16",
 Explicit rules override `OTPU_PRECISIONS`; an explicit empty string disables it.
 `OTPU_FORMATS` and existing `--wformat int4/fp4/nvfp4/mix` retain their current
 meaning. No new mixed policy is recommended automatically before quality checks.
+W4A16 reduces weight storage but adds device decode work and still uses HMM;
+it is not a promise of higher throughput. Measure device cycles separately from
+program compilation, image loading and the staged host launch overhead.
 The policy identity records resolved choices, so equivalent rule spellings share
 an identity while different operator choices do not alias.
 
@@ -118,3 +121,19 @@ Tests and generated reports follow the existing `tests/`, `tools/` and ignored
 `build/mixed_precision/` layout. Record quality separately from ISA/RTL agreement;
 a bit-exact implementation does not prove that a quantization policy preserves
 model accuracy.
+
+## Component timing evidence
+
+The `0c31d07d` HDQ/HMM/HCVT component was routed on `xcv80-lsva4737-2MHP-e-S`
+with Vivado 2026.1.1, N=8 and W4A16=1. At a 10 ns period its registered OOC
+boundary has WNS +3.808 ns and WHS +0.032 ns, using 9,896 LUTs, 5,201 FFs and
+16 DSPs, with no BRAM/URAM. This passes the component timing/DRC gate; it is
+not a whole-board timing or deployment result. The reproducible invocation is:
+
+```bash
+vivado -mode batch -source rtl/exp/fp16/ooc.tcl \
+  -tclargs /path/to/output xcv80-lsva4737-2MHP-e-S 8 10 mxu 1
+```
+
+The full `v80:mixed` build and real-model checks use a separate build tree. The
+qualified `feat/fp16` artifacts and original V80 flash are retained.

@@ -7,7 +7,7 @@ by checks.run_demo. The programs are self-contained on the card too, where TMEM 
 keep the previous run's contents: they only store TMEM words they wrote, and every MM reads ACT
 RAM blocks its own QACT filled.
 
-Groups (otpu-diag's diagnosis keys on them): control, dma, mxu, fp16, quant, collective, vpu,
+Groups (otpu-diag's diagnosis keys on them): control, dma, mxu, fp16, w4a16, quant, collective, vpu,
 vpu-reduce, vpu-composite, vpu-edge, vpu-new (RDOT / OUTER / LOG2, which bitstreams before
 ddec900 lack), gen (RLD, VOP ARGMAX, HALT CHAIN: the decode loop's instructions, CAPS bit30;
 only with gen=True), waitw (WAITW whose condition holds, CAPS bit31; only with waitw=True);
@@ -58,6 +58,8 @@ def diag_image(cfg=None) -> np.ndarray:
                                     at=W8 if cfg.CHASH else None)
         img[W8:W8 + weights.size] = weights.ravel()
         img[SC:SC + scales.size] = scales.ravel()
+    img[EDGE + 8 * NE:EDGE + 8 * NE + 16] = np.array(
+        [0x76543210, 0xFEDCBA98, 0x76543210, 0xFEDCBA98], np.uint32).view(np.uint8)
     e = np.array(EDGE_BITS, np.uint32)
     img[EDGE:EDGE + 4 * NE] = e.view(np.uint8)
     img[EDGE + 4 * NE:EDGE + 8 * NE] = e[::-1].copy().view(np.uint8)
@@ -178,6 +180,15 @@ def op_checks(cfg, gen: bool = False, waitw: bool = False,
                 _p(*packed, I.ld(DATA + 0x2000, RES, 48),
                    I.hmm(RES, 4096, 4160, 3, 11, 7, 4, 6, 16, acc=acc),
                    I.st(OUT, RES, 48)))
+
+    if cfg.FP16 and cfg.W4A16:
+        for n in (17, 32):
+            add("w4a16", f"HDQ signed codes / half scales n={n}",
+                [I.ld(EDGE, TE, NE), I.hcvt(4096, TE, NE),
+                 I.ld(EDGE + 8 * NE, 4160, 4), I.li(1, RES), I.li(2, 4160), I.li(3, 4096),
+                 I.hdq(0, 0, 0, n, ra=1, rb=2, rc=3),
+                 I.st(OUT, RES, (n + 1) // 2), I.hcvt(4608, RES, n, unpack=True),
+                 I.st(OUT + 256, 4608, n), I.halt()])
 
     # ---- quantizer
     add("quant", "QACT ROW", _mm(cfg, qflags={"row": True}))

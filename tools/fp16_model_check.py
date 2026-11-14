@@ -1,11 +1,12 @@
-"""Qualify native FP16 dense Qwen3.5 against the ordered reference.
+"""Qualify native FP16 or explicit mixed-precision Qwen3.5 against the ordered reference.
 
     PYTHONPATH=. python tools/fp16_model_check.py MODEL --output report.json
     PYTHONPATH=. python tools/fp16_model_check.py MODEL --backend board --dev qdma:BDF@Q --output report.json
 
 Checks every layer residual, all recurrent/KV state and full logits over consecutive
 tokens. The reference is an independent host oracle; the engine runs all model math
-on the selected backend. A board run requires an already programmed FP16 overlay.
+on the selected backend. --precision/--precisions select mixed matrix modes; the
+default remains FP16. A board run requires an already programmed compatible overlay.
 """
 import argparse
 import hashlib
@@ -20,7 +21,7 @@ from opentpu.host.chat import make_backend
 from opentpu.llm.qwen3 import load_weights
 from opentpu.llm.qwen35 import Spec, reference_logits
 from opentpu.llm.qwen35_fp16 import Engine, Reference
-from opentpu.llm.precision import MODES, Policy
+from opentpu.llm.precision import MODES
 
 
 def main():
