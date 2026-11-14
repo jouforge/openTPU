@@ -24,6 +24,7 @@ Layout transitions are the data movement:
 | `ol.load(t)` | `LD` | DRAM to TMEM, burst |
 | `ol.store(t, x)` | `ST` | TMEM to DRAM, burst |
 | `ol.load_fp16(t)` | `LD` | packed binary16 DRAM rows to packed TMEM |
+| `ol.store_fp16(t, x)` | `ST` | packed TMEM to binary16 DRAM, even widths and word-aligned rows |
 | `ol.pack_fp16(x)`, `ol.unpack_fp16(x)` | `HCVT` | explicit TMEM FP32 / binary16 boundary |
 | `ol.matmul_fp16(a, b, acc)` | `HMM` | packed TMEM `[M,K] @ [K,N]`, ordered FP32 accumulation |
 | `ol.quantize(x)` | `QACT` | TMEM fp32 rows to ACT RAM int8 |
@@ -39,7 +40,10 @@ hardware loops and an FP32 accumulator carried across K. `HalfWeight` accepts
 conventional `[N,K]` weights, transposes/packs them as `[K,N]`, and can partition
 output columns across slices. `kernels.fp16.swiglu` composes three projections
 with FP32 SiLU/product and caller-owned DRAM scratch. These building blocks do
-not yet replace the model engine's quantized paths. See the [FP16 contract and
+not yet replace the model engine's quantized paths. `kernels.fp16_attention`
+provides packed KV append and native QK / FP32 softmax / native P.V;
+`llm.qwen35_fp16.AttentionImage` composes them into a complete S=1 Qwen3.5
+attention sublayer with persistent caches. See the [FP16 contract and
 integration status](fp16.md) for layouts, rounding and current limitations.
 
 The KV cache (`compiler.KVDesc`): K token-major `[cap, d]` with a scale row per token

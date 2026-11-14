@@ -66,3 +66,35 @@ def matmul(a, b, acc=None) -> np.ndarray:
     for k in range(a.shape[1]):
         out = madd(a[:, k, None], b[None, k, :], out)
     return out
+
+
+def attention(q, kt, v, mask=None, softmax_block=32) -> tuple[np.ndarray, np.ndarray]:
+    """Packed Q[M,D], K^T[D,T], V[T,Dv] -> (FP32 output, FP32 probabilities).
+
+    Reference for kernels.fp16_attention.attend: scale QK after accumulation,
+    stable FP32 softmax, then round normalized P to half before ordered P.V.
+    mask is +inf/-inf, with at least one unmasked token per row. Reductions use
+    the VPU's partial sums within a chunk, then ordered addition across chunks.
+    """
+    q, kt, v = (np.asarray(x, np.uint16) for x in (q, kt, v))
+    if any(x.ndim != 2 or 0 in x.shape for x in (q, kt, v)) or \
+            q.shape[1] != kt.shape[0] or kt.shape[1] != v.shape[0]:
+        raise ValueError("FP16 attention requires nonempty [M,D], [D,T], [T,Dv]")
+    if not isinstance(softmax_block, int) or not 0 < softmax_block <= 65535:
+        raise ValueError("FP16 softmax block must be in 1..65535")
+    if any(np.any((x & 0x7C00) == 0x7C00) for x in (q, kt, v)):
+        raise ValueError("FP16 attention requires finite operands")
+    scores = F.mul(matmul(q, kt), np.float32(1.0 / np.sqrt(q.shape[1])))
+    if mask is not None:
+        mask = F.f32(mask)
+        if mask.shape != scores.shape or not np.isinf(mask).all() or \
+                not np.any(mask > 0, axis=1).all():
+            raise ValueError("FP16 attention mask must be +/-inf with valid tokens in every row")
+        scores = F.fmin(scores, mask)
+    p = F.exp2(F.mul(F.sub(scores, F.chain_max(scores)[:, None]),
+                    np.float32(1.0 / np.log(2.0))))
+    total = np.zeros(q.shape[0], np.float32)
+    for t in range(0, kt.shape[1], softmax_block):
+        total = F.add(total, F.interleaved_sum(p[:, t:t + softmax_block], F.RED_PARTIALS))
+    p = F.mul(p, F.recip(total)[:, None])
+    return matmul(pack(p), v), p

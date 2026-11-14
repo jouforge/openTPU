@@ -165,6 +165,22 @@ def test_invalid_tiled_operands():
         HalfWeight(np.ones((3, 7)), shard=1)
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_loop_alias_proof_checks_every_iteration(reverse):
+    @ol.jit
+    def k(a, b, out):
+        for i in ol.range(3):
+            col = 4 - i * 2 if reverse else i * 2
+            matmul(a[:, col:col + 2], b, out)
+
+    a = Tensor(Affine(0), (1, 8), (8, 1))
+    b = HalfTensor(Tensor(Affine(512), (2, 2), (2, 1), esize=2))
+    out = Tensor(Affine(24), (1, 2), (2, 1))
+    k.trace(CFG, 0, dict(a=a, b=b, out=out)).finish()
+    with pytest.raises(CompileError, match="disjoint"):
+        k.trace(CFG, 0, dict(a=a, b=b, out=replace(out, base=Affine(16))))
+
+
 @ol.jit
 def mlp(x, wg, wu, wd, gate, up, out):
     swiglu(x, wg, wu, wd, out, (gate, up), (2, 8, 8))

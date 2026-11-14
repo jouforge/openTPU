@@ -29,7 +29,8 @@ from .compiler import (TEMP_RC_FN, Affine, Bcast, CompileError, HalfTensor, Half
 __all__ = ["jit", "program_id", "num_programs", "block_size", "tmem_words", "mxu_columns",
            "load", "store", "dot", "quantize", "stationary", "quantize_into", "exp2", "log2",
            "recip", "rsqrt", "abs", "maximum", "minimum", "max", "sum", "sumsq", "outer", "full",
-           "zeros", "HalfTensor", "HalfTile", "load_fp16", "pack_fp16", "unpack_fp16", "matmul_fp16",
+           "zeros", "HalfTensor", "HalfTile", "load_fp16", "store_fp16", "pack_fp16",
+           "unpack_fp16", "matmul_fp16",
            "empty", "all_gather", "all_reduce", "range", "static_range", "kv_append", "Tensor", "QTensor",
            "KVDesc", "Tile", "CompileError", "LOG2E", "LN2"]
 
@@ -94,6 +95,11 @@ def pack_fp16(x: Tile) -> HalfTile:
 def unpack_fp16(x: HalfTile) -> Tile:
     """Expand binary16 TMEM to FP32 for the VPU."""
     return current().unpack_fp16(x)
+
+
+def store_fp16(desc: HalfTensor, x: HalfTile) -> None:
+    """Packed TMEM -> DRAM, whole words only (even width and word-aligned rows)."""
+    current().store_fp16(desc, x)
 
 
 def matmul_fp16(a: HalfTile, b: HalfTile, acc: Tile | None = None) -> Tile:

@@ -2085,6 +2085,9 @@ class Builder:
     def pack_fp16(self, x: Tile) -> HalfTile:
         self._half_live(x, Tile)
         out = self._half_alloc(x.shape)
+        if x.contiguous and x.cols % 2 == 0 and x.rows * x.cols <= 65535:
+            self.emit(I.hcvt(out.base, x.base, x.rows * x.cols, comment="pack fp16"))
+            return out
         for r in builtins.range(x.rows):
             self.emit(I.hcvt(out.base + r * out.rs, x.base + r * x.rs, x.cols,
                              comment="pack fp16"))
@@ -2093,6 +2096,10 @@ class Builder:
     def unpack_fp16(self, x: HalfTile) -> Tile:
         self._half_live(x, HalfTile)
         out = self.alloc(x.shape)
+        if x.storage.contiguous and x.shape[-1] % 2 == 0 and out.rows * out.cols <= 65535:
+            self.emit(I.hcvt(out.base, x.base, out.rows * out.cols, unpack=True,
+                             comment="unpack fp16"))
+            return out
         for r in builtins.range(out.rows):
             self.emit(I.hcvt(out.base + r * out.rs, x.base + r * x.rs, out.cols,
                              unpack=True, comment="unpack fp16"))
@@ -2115,6 +2122,28 @@ class Builder:
             self.emit(I.ld(imm, out.base + r * out.rs, (t.shape[-1] + 1) // 2,
                            ra=ra, comment="load fp16 row"))
         return out
+
+    def store_fp16(self, desc: HalfTensor, x: HalfTile) -> None:
+        self._half_live(x, HalfTile)
+        if not isinstance(desc, HalfTensor) or desc.shape != x.shape:
+            raise CompileError("store_fp16 requires a HalfTensor with the source shape")
+        t = desc.storage
+        base = Affine.of(t.base)
+        if t.esize != 2 or t.strides[-1] != 1 or base.const % 4 or \
+                any(c % 4 for c in base.terms.values()) or \
+                (len(t.shape) == 2 and t.strides[0] % 2):
+            raise CompileError("store_fp16 requires contiguous elements and word-aligned rows")
+        # ST writes whole words: an odd-width subview would destroy its next
+        # halfword. Callers must include both halves, preserving a neighbour by
+        # read/modify/write when necessary (the transposed K cache's append).
+        if t.shape[-1] % 2:
+            raise CompileError("store_fp16 requires an even width (whole words)")
+        rows = t.shape[0] if len(t.shape) == 2 else 1
+        merged = x.storage.contiguous and (rows == 1 or t.strides[0] == t.shape[-1])
+        for r in builtins.range(1 if merged else rows):
+            ra, imm = self.addr(base + r * 2 * t.strides[0])
+            words = t.shape[-1] // 2 * (rows if merged else 1)
+            self.emit(I.st(imm, x.base + r * x.rs, words, ra=ra, comment="store fp16"))
 
     def matmul_fp16(self, a: HalfTile, b: HalfTile, acc: Tile | None = None) -> Tile:
         self._half_live(a, HalfTile)

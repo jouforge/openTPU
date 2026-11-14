@@ -7,7 +7,7 @@ remain FP32; no partial sum is rounded to half or reduced in another order.
 from dataclasses import replace
 
 from .. import language as ol
-from ..compiler import Affine, HalfTensor, Tensor, current
+from ..compiler import Affine, HalfTensor, Loop, Tensor, current
 from .lib import silu
 
 
@@ -42,7 +42,13 @@ def _apart(src, dst):
     delta = Affine.of(dst.base) - Affine.of(src.base)
     ss = ((src.shape[0] - 1) * src.strides[0] + src.shape[1]) * src.esize
     ds = ((dst.shape[0] - 1) * dst.strides[0] + dst.shape[1]) * dst.esize
-    if delta.terms or -ds < delta.const < ss:
+    lo = hi = delta.const
+    for term, coeff in delta.terms.items():
+        if not isinstance(term, Loop) or term.rcount or term.count <= 0:
+            raise ol.CompileError("FP16 matmul requires provably disjoint input and output storage")
+        span = coeff * (term.count - 1)
+        lo, hi = lo + min(0, span), hi + max(0, span)
+    if lo < ss and hi > -ds:
         raise ol.CompileError("FP16 matmul requires provably disjoint input and output storage")
 
 
