@@ -47,6 +47,8 @@ def main():
                   precision=a.precision, rules=eng.image.formats, head=eng.image.head_format, group=a.w4_group,
                   image_bytes=eng.image.nbytes, load_s=time.monotonic() - start, runs=[])
     print(json.dumps(report), flush=True)
+    core_khz = getattr(eng.backend, "info", {}).get("core_khz")
+    report["core_khz"] = core_khz
     ref = Reference(spec, W, a.cap, policy=eng.image.policy, D=cfg.D, group=a.w4_group)
     run, stages, residuals = eng.backend.run, [0], []
 
@@ -66,7 +68,7 @@ def main():
             stages[0], residuals[:] = 0, []
             start = time.monotonic()
             got = eng.step(token)
-            device_s = time.monotonic() - start
+            step_wall_s = time.monotonic() - start
 
             def check_layer(i, x):
                 np.testing.assert_array_equal(F.bits(residuals[i]), F.bits(x[0]), err_msg=f"layer {i}")
@@ -87,7 +89,9 @@ def main():
             record = dict(pos=eng.pos - 1, token=token, exact=True, states_exact=True,
                           finite=bool(np.isfinite(got).all()), argmax=int(got.argmax()),
                           logits_sha256=hashlib.sha256(got.tobytes()).hexdigest(),
-                          device_s=device_s, reference_s=time.monotonic() - start - device_s,
+                          step_wall_s=step_wall_s,
+                          device_s=eng.stats[-1]["cycles"] / (core_khz * 1000) if core_khz else None,
+                          reference_s=time.monotonic() - start - step_wall_s,
                           stats=eng.stats[-1])
             original = reference_logits(spec, W, a.tokens[:eng.pos])[-1].astype(np.float64)
             actual = got.astype(np.float64)
