@@ -211,8 +211,8 @@ All six native AXI RTL projection results remain bit-exact, with unchanged
 programs and output hashes. `tb_hdot` also checks the new acceptance interval
 and cancellation with two accepted beats in flight, for multiple lane counts
 and multiplier/adder latencies. The instruction/kernel/model regressions and
-full V80 implementation are separate gates; no new physical-board speedup is
-claimed here.
+full V80 implementation are separate gates. Physical results for this combined
+candidate follow below.
 
 Evidence: `build/perf_v80/pipeline-rtl.json`, `pipeline/hdot-overlap.log` and
 `pipeline-ooc/`. RTL/runtime source hashes in the isolated benchmark match the
@@ -236,15 +236,181 @@ python -m pytest -q tests/test_fp16_isa.py tests/test_mixed.py \
   tests/test_int4_isa.py::test_decode_reset_rtl tests/test_fp16.py
 ```
 
+The broader final sweep passes **151 tests**, covering FP16/INT4 instructions,
+mixed projections and models, tiled FP16, compiler, attention, full FP16 models,
+precision policy and arithmetic. An initial sweep exposed `ask_plain` retaining
+the standard-output stream captured when the module was imported; a later CLI
+invocation could write to an already closed capture stream. Runtime `8c8f6450`
+resolves the default stream at each call. Both the 12-test model/CLI subset and
+the complete 151-test sweep pass after that fix. Evidence:
+`build/perf_v80/chat-regression.log`, `final-regression-fixed.log` and
+`regression-review.json`. No hardware input changed with the CLI fix.
+
 The full V80 build uses a clean, detached copy of `913a298d` at
 `/home/pqq/workspace/openTPU-perf-build/full-v1/src`. All 53 hardware inputs match
 the generated manifest; only `otpu_hmxu.sv` and `otpu_hdot.sv` differ from the
 qualified mixed image's hardware inputs. Clocks remain 100/200 MHz and the
 architecture hash remains `154f92b2`; the new build ID is `913a298d`.
 
-Full implementation, export/CDC review and matching AMC packaging are still
-pending. Physical qualification will then check the complete 32 GiB memory,
-HMM and HDQ interruption/recovery, legacy INT8, all five model policies, and
-same-clock projection/model profiles against the retained baseline. The card
-still runs the old qualified image. No physical speedup or completed resource,
-frequency or scale optimization is claimed for this candidate yet.
+Full implementation, export/CDC review and matching AMC packaging pass. The
+independent route audit finds the expected 24 RAM exceptions and 16 Gray-code
+groups. XSA/PDI hashes and BIF references agree, and implementation reports no
+DRC errors or critical warnings.
+
+| Full routed design | Mixed baseline | Combined candidate |
+|---|---:|---:|
+| LUT | 220,805 | 220,253 |
+| FF | 196,628 | 196,638 |
+| DSP | 1,356 | 1,356 |
+| RAMB36 / RAMB18 | 1,040 / 40 | 1,040 / 40 |
+| URAM | 0 | 0 |
+| Setup / hold slack, ns | +0.444 / +0.010 | +0.224 / +0.010 |
+
+Whole-design optimization makes these deltas different from isolated HMXU
+results; do not add the component delta to the previous overlay total. Evidence:
+`build/perf_v80/full-v1/evidence/`, and the matching server `platform/reports/`,
+`platform/artifact_review.json`, `route_audit.log` and `deploy/ACCEPTED.json`.
+
+The candidate was loaded through volatile JTAG, with AMC READY and QDMA queue 4
+online. Physical numerical qualification passes: all eight 4 GiB channels pass
+full March C-, 105 ISA checks and five system checks pass with 20 soak iterations,
+and HMM/HDQ each recover exactly after four interrupted runs. Reset tests finish
+operand setup before starting the long-running operator, so the interruption
+does not merely cancel setup. Legacy INT8 matches all 128 steps across eight
+prompts. All five model policies match intermediate outputs, persistent states
+and final logits for both retained tokens, with the final hashes independently
+checked against the preceding branch's references.
+
+Evidence is retained on qfpga0 at
+`full-v1/board-qualification/20261115_101346/` under the performance build root,
+including `qualification_review.json`; JSON copies are in
+`build/perf_v80/full-v1/board-qualification/`. The performance gate below fails;
+the candidate has **not** received complete board acceptance or a
+`deploy/QUALIFIED.json`. Flash/FPT have not been written.
+
+## Physical performance and the open W8A8 regression
+
+At the same 100/200 MHz clocks, the combined candidate produces exact outputs
+for all 18 projection runs and all 20 model profiling steps. The warm second
+model step, with the same tokens, cap and policies as the baseline above:
+
+| Policy | Baseline device seconds | Candidate device seconds | Device cycle reduction | Candidate host wall seconds |
+|---|---:|---:|---:|---:|
+| W16A16 | 13.02159 | 9.44715 | 27.45% | 9.83678 |
+| W8A8 | 0.10433 | 0.10926 | **-4.72%** | 0.28498 |
+| W4A16 | 18.35822 | 14.83279 | 19.20% | 15.37066 |
+| mixed | 14.15015 | 10.79681 | 23.70% | 11.19586 |
+| gateup4 | 8.74814 | 6.71254 | 23.27% | 6.97794 |
+
+These cap-8 measurements establish neither long-context throughput nor model
+quality. Half-path improvements are substantial, but the W8A8 regression
+exceeds the 2% acceptance limit. The performance review exits with failure;
+the limit is unchanged and final acceptance remains open. Evidence is under
+`/home/pqq/workspace/openTPU-perf-build/full-v1/performance/`.
+
+A physical new/old/new comparison reproduces the W8A8 difference using exactly
+the same runtime `8c8f6450`, image/program caches, tokens and compiler settings.
+Each load runs one initial token pair and eight reset/replay pairs. All 54
+outputs match the preceding branch's logits bit for bit. Warm second-token
+medians are 10,924,173.5 cycles on the first new load, 10,430,709.5 on the old
+image, and 10,925,740 on the second new load. This rules out the runtime revision
+and a single noisy baseline sample as explanations for the measured difference.
+
+Hardware input hashes differ only for the two half-path RTL files; exported
+board parameters differ only in build ID. The NoC traffic specification and
+logical instance description are identical, but the physical NoC solution
+changes NMU placement and routes. For example, the S08 input moves from
+`NOC_NMU512_X1Y5` to `NOC_NMU512_X2Y6`, and its reported NoC path latency changes
+from 111 to 115. These report values are not core-clock cycles. This is a
+candidate explanation requiring a controlled implementation comparison, not
+an established root cause. Evidence: `full-v1/ab/repeat-summary.json`,
+`platform-comparison.json` and `noc-path-review.json` on qfpga0.
+
+The existing `tools/board_perf.py` now opens QDMA through the shared transport
+factory and records the physical build ID. Its ISA/board/QDMA regression passes
+27 tests. Three physical repetitions on each image pass every data comparison:
+
+| Memory-path measurement | Mixed baseline median cycles | Combined candidate median cycles |
+|---|---:|---:|
+| INT8 weight stream, 8 MiB | 50,408 | 51,322 |
+| INT8 weight stream, 32 MiB | 197,384 | 203,185 |
+| INT8 weight stream, 128 MiB | 789,967 | 811,365 |
+| Pointer chase, 1,040 hops | 84,689 | 84,786 |
+| Port B loads, 64 MiB | 2,212,941 | 2,212,951 |
+| Port B stores, 64 MiB | 2,218,669 | 2,218,334 |
+
+The weight stream regresses by 2.71% at 128 MiB, while ordinary load/store
+throughput is effectively unchanged. This narrows the investigation; it does
+not establish which physical change causes the full-model regression. Records
+and hardware counters are in `full-v1/ab/{new-1,old-2}/memory-*.json` and
+`full-v1/ab/memory-summary.json`. The card has been restored to qualified build
+`0c31d07d`; AMC READY, QDMA queue 4, the established Gen4 x8 link and unchanged
+FPT were checked after restoration.
+
+A separate `exp/v80-noc` experiment at `4ebbec16` pins the eight PL NMUs and the
+control NSU to their locations in the qualified baseline. It uses the unchanged
+combined RTL, FIFO depth 2048 and 100/200 MHz clocks. This follows AMD's
+[NoC endpoint placement constraints](https://docs.amd.com/r/en-US/pg313-network-on-chip/Constraining-NMU/NSU-Locations).
+The configuration/build tests pass 102 cases. Full implementation is running at
+`openTPU-perf-build/full-noc`; its package check will verify the actual endpoint
+locations in the exported NoC solution. Fixing endpoints does not guarantee
+identical routes or improved performance; those still need board measurements.
+
+The routed timing report identifies two useful targets for subsequent resource
+and clock work. The worst setup path is `rst_mem_reg` in the 100 MHz domain to a
+TMEM replay register's reset in the related 200 MHz domain: 5 ns requirement,
+2.268 ns data delay and -2.166 ns clock skew, leaving +0.224 ns. The integer MXU's
+`pop_q[KBm1]` to posted FIFO read-address path has 9.446 ns data delay, 93.6% in
+routing, with +0.369 ns slack. These paths motivate measuring queue size and
+local control distribution before increasing frequency. They remain timed;
+removing their timing checks would not demonstrate a faster design.
+
+## Integer MXU resource experiments
+
+`rtl/exp/v80_mxu/ooc.tcl` runs synthesis out of context with the current V80
+integer MXU parameters, including the board's posted FIFO quarter writes
+(`XPOST=1,QB=2`). Only FIFO depth and arithmetic cell family vary:
+
+```bash
+vivado -mode batch -source rtl/exp/v80_mxu/ooc.tcl \
+  -tclargs build/perf_v80/mxu-512 512 xilinxversal
+```
+
+The study compares `xilinxversal` at depths 2048, 1024 and 512, then `generic`
+at the same depth 512. `inputs.txt` records the complete generic list, source
+revision and hashes of every source and the Tcl script. Each case retains its
+utilization reports and synthesis checkpoint. These are component synthesis
+counts with exposed ports, not routed overlay resources or timing results.
+No default target setting changes as part of this study.
+
+Completed synthesis on the same V80 part and Vivado 2026.1.1:
+
+| Family / FIFO depth | LUT | FF | DSP | RAMB36 | RAMB18 | BRAM36 equivalents |
+|---|---:|---:|---:|---:|---:|---:|
+| xilinxversal / 2048 | 56,626 | 45,409 | 1,194 | 548 | 5 | 550.5 |
+| xilinxversal / 1024 | 56,376 | 45,319 | 1,194 | 274 | 5 | 276.5 |
+| xilinxversal / 512 | 57,498 | 45,353 | 1,194 | 119 | 41 | 139.5 |
+| generic / 512 | 157,914 | 123,809 | 1,178 | 119 | 41 | 139.5 |
+
+FIFO depth 512 saves 411 BRAM36 equivalents (74.66%) in this component, at a
+cost of 872 LUT and with unchanged DSP use. At depth 512, generic saves only
+16 DSP while adding 100,416 LUT and 78,456 FF. The next full-build experiment
+therefore retains xilinxversal and reduces FIFO depth alone. Neither result
+demonstrates sustained throughput or full-design timing.
+
+The isolated `exp/v80-fifo512` source `a16301b8` changes only the target's FIFO
+depth relative to `51db044d`. It passes 87 configuration/build tests, the native
+integer-MM check across all four integer weight formats, and three exact
+mixed-model steps including reset/replay under AXI stalls. Source hashes match
+the resource study and test inputs. Its full implementation is running at
+100/200 MHz under `openTPU-perf-build/full-fifo512` on qfpga0. This is an
+experiment: the preceding candidate's failed W8 gate remains recorded, and
+any replacement must independently pass against the qualified mixed baseline.
+The default `perf/v80` target remains at FIFO depth 2048 until those checks pass.
+
+The existing resource parser now recognizes Versal's `DSP Slices`, `RAMB36E5`
+and `RAMB18E5*` summary rows. Previously those names silently yielded zero.
+The half controller is also registered as its own `otpu_hmxu` component with
+FP16/INT4 and native mixed-model gates. The component/report toolchain's 71
+tests pass; the legacy INT8 performance proxy is not used to score the half
+controller. Evidence: `build/perf_v80/resource-parser-tests-fixed.log`.
