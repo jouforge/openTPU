@@ -356,6 +356,15 @@ The configuration/build tests pass 102 cases. Full implementation is running at
 locations in the exported NoC solution. Fixing endpoints does not guarantee
 identical routes or improved performance; those still need board measurements.
 
+The routed solution has now been checked: all nine endpoint locations match
+the baseline, and all NoC net connections and reported path latencies match
+too. The FIFO512 experiment, whose endpoints are still unconstrained, changes
+158 NoC nets and 100 reported net latencies. Therefore its forthcoming board
+performance cannot be attributed to queue depth alone. The separate fixed-NoC
+experiment is necessary to interpret that result. Evidence:
+`full-noc/noc-comparison.json`, `full-fifo512/noc-comparison.json` and their
+`routed-noc-endpoints.json` files on qfpga0.
+
 The routed timing report identifies two useful targets for subsequent resource
 and clock work. The worst setup path is `rst_mem_reg` in the 100 MHz domain to a
 TMEM replay register's reset in the related 200 MHz domain: 5 ns requirement,
@@ -407,6 +416,27 @@ the resource study and test inputs. Its full implementation is running at
 experiment: the preceding candidate's failed W8 gate remains recorded, and
 any replacement must independently pass against the qualified mixed baseline.
 The default `perf/v80` target remains at FIFO depth 2048 until those checks pass.
+
+The follow-up **routed whole-design** reports at 100/200 MHz now show:
+
+| Candidate | LUT | FF | DSP | RAMB36 | RAMB18 | Setup / hold slack, ns |
+|---|---:|---:|---:|---:|---:|---:|
+| Combined half path, FIFO2048 (`913a298d`) | 220,253 | 196,638 | 1,356 | 1,040 | 40 | +0.224 / +0.010 |
+| FIFO2048, baseline NoC placement (`4ebbec16`) | 220,273 | 196,638 | 1,356 | 1,040 | 40 | +0.391 / +0.010 |
+| FIFO512, unconstrained NoC (`a16301b8`) | 220,424 | 196,144 | 1,356 | 611 | 76 | +0.746 / +0.010 |
+
+The FIFO512 whole design saves 411 BRAM36 equivalents, from 1,060 to 649
+(38.77%), with unchanged DSP use. Both follow-up implementations pass their
+timing and DRC gates. Export, independent route checks, AMC packaging and
+physical validation remain separate requirements.
+
+The local board tasks are queued behind those build gates. They first test the
+fixed-NoC image with repeated W8 model steps and the memory benchmarks, then
+full memory/reset checks, legacy INT8, five model policies, performance and
+chat. The FIFO512 task starts only after the fixed-NoC image is fully qualified.
+A failed physical check retains its evidence and restores the preceding
+qualified image. These tasks use volatile JTAG and never write Flash. Neither
+experimental target setting has been merged into the default branch.
 
 The existing resource parser now recognizes Versal's `DSP Slices`, `RAMB36E5`
 and `RAMB18E5*` summary rows. Previously those names silently yielded zero.
