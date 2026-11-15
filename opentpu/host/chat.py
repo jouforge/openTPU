@@ -874,9 +874,11 @@ class Chat:
         self._next = t if turn.end == "max_new" else None
         return self._finish(out, shown, turn, on_update)
 
-    def ask_plain(self, text: str | None, stream=sys.stdout) -> str:
+    def ask_plain(self, text: str | None, stream=None) -> str:
         """ask() (resume() for None) printing the reply as it streams, then the turn's
         numbers."""
+        if stream is None:
+            stream = sys.stdout
         def show(delta, turn):
             stream.write(delta)
             stream.flush()
