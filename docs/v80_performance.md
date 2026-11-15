@@ -351,15 +351,16 @@ A separate `exp/v80-noc` experiment at `4ebbec16` pins the eight PL NMUs and the
 control NSU to their locations in the qualified baseline. It uses the unchanged
 combined RTL, FIFO depth 2048 and 100/200 MHz clocks. This follows AMD's
 [NoC endpoint placement constraints](https://docs.amd.com/r/en-US/pg313-network-on-chip/Constraining-NMU/NSU-Locations).
-The configuration/build tests pass 102 cases. Full implementation is running at
-`openTPU-perf-build/full-noc`; its package check will verify the actual endpoint
-locations in the exported NoC solution. Fixing endpoints does not guarantee
-identical routes or improved performance; those still need board measurements.
+The configuration/build tests pass 102 cases. Full implementation and board
+qualification have completed at `openTPU-perf-build/full-noc`. The package
+check verifies actual endpoint locations in the exported NoC solution.
+Endpoint constraints alone do not guarantee identical routes; both the routed
+solution and physical performance were checked for this build.
 
 The routed solution has now been checked: all nine endpoint locations match
 the baseline, and all NoC net connections and reported path latencies match
 too. The FIFO512 experiment, whose endpoints are still unconstrained, changes
-158 NoC nets and 100 reported net latencies. Therefore its forthcoming board
+158 NoC nets and 100 reported net latencies. Therefore its board
 performance cannot be attributed to queue depth alone. The separate fixed-NoC
 experiment is necessary to interpret that result. Evidence:
 `full-noc/noc-comparison.json`, `full-fifo512/noc-comparison.json` and their
@@ -411,7 +412,7 @@ The isolated `exp/v80-fifo512` source `a16301b8` changes only the target's FIFO
 depth relative to `51db044d`. It passes 87 configuration/build tests, the native
 integer-MM check across all four integer weight formats, and three exact
 mixed-model steps including reset/replay under AXI stalls. Source hashes match
-the resource study and test inputs. Its full implementation is running at
+the resource study and test inputs. Its full implementation completed at
 100/200 MHz under `openTPU-perf-build/full-fifo512` on qfpga0. This is an
 experiment: the preceding candidate's failed W8 gate remains recorded, and
 any replacement must independently pass against the qualified mixed baseline.
@@ -430,13 +431,64 @@ The FIFO512 whole design saves 411 BRAM36 equivalents, from 1,060 to 649
 timing and DRC gates. Export, independent route checks, AMC packaging and
 physical validation remain separate requirements.
 
-The local board tasks are queued behind those build gates. They first test the
-fixed-NoC image with repeated W8 model steps and the memory benchmarks, then
-full memory/reset checks, legacy INT8, five model policies, performance and
-chat. The FIFO512 task starts only after the fixed-NoC image is fully qualified.
-A failed physical check retains its evidence and restores the preceding
-qualified image. These tasks use volatile JTAG and never write Flash. Neither
-experimental target setting has been merged into the default branch.
+The fixed-NoC build `4ebbec16` now passes complete physical qualification:
+32 GiB memory checks, ISA/system/soak tests, interrupted-operation reset
+recovery, legacy INT8, all five precision policies, model/projection performance,
+chat and final AMC/QDMA/FPT health. The package is sealed in
+`full-noc/deploy/QUALIFIED.json`. Its 18 repeated W8 outputs and 27 memory-path
+checks are exact. Warm model-step median cycles change by -0.33% and -0.37%
+at positions 0 and 1, resolving the earlier 4.7% full-model regression on this
+configuration. The original 2% full-model W8 limit remains unchanged.
+
+| Policy | Baseline warm position-1 cycles | Fixed-NoC cycles | Reduction |
+|---|---:|---:|---:|
+| W16A16 | 1,302,158,616 | 953,125,773 | 26.80% |
+| W8A8 | 10,433,294 | 10,394,114 | 0.38% |
+| W4A16 | 1,835,822,120 | 1,483,336,874 | 19.20% |
+| mixed | 1,415,015,274 | 1,084,314,638 | 23.37% |
+| gateup4 | 874,813,528 | 672,324,117 | 23.15% |
+
+These are device cycles for the established two-token, capacity-8 comparison;
+they do not establish long-context throughput or model accuracy on a corpus.
+Small W8 projection cases still take 368 versus 356 cycles and 1,680 versus
+1,639 cycles. Thus the passing full-model gate does not mean every individual
+operator is faster. Raw measurements and review are in
+`full-noc/performance/REVIEW.json` and `full-noc/triage/REVIEW.json`.
+
+The unconstrained FIFO512 image `a16301b8` passes all 18 repeated W8 numerical
+comparisons and 27 memory checks, but warm full-model cycles increase by 9.28%
+and 9.22%. Its performance gate fails; full qualification is not claimed and
+its target setting is not promoted. The coordinator restored qualified
+`4ebbec16` through volatile JTAG and independently checked the build ID,
+AMC READY, QDMA queue 4 and unchanged FPT. Evidence is in
+`full-fifo512/triage/REVIEW.json`, `restore.exit` and
+`recovery-noc/health_final.json`.
+
+The three-repeat memory benchmarks also distinguish these images. The 128 MiB
+INT8 weight-stream median is 789,967 cycles on the baseline, 790,327 with fixed
+NoC (+0.05%), and 937,183 with unconstrained FIFO512 (+18.64%). Ordinary 64 MiB
+load/store paths remain within 0.04% of baseline. These observations support
+focusing on weight delivery, but cannot yet separate FIFO depth from placement.
+Evidence: `openTPU-perf-build/followup-memory-summary.json` and the three
+`triage/memory-*.json` files for each candidate.
+
+The qualified NoC constraints are now included in `perf/v80`; FIFO depth remains
+2048. The isolated `exp/v80-noc-fifo512` experiment at `2c062965` combines those
+constraints with FIFO512, keeping arithmetic and clocks unchanged. Its 102
+configuration/build checks pass; the earlier FIFO512 native integer-MM and
+mixed-model/reset test source hashes match exactly. Full implementation is
+running at `openTPU-perf-build/full-noc-fifo512`. Its queued coordinator will
+run the same board gates and restore qualified `4ebbec16` if a physical check
+fails. It must pass the same gates before
+any queue-depth default changes. Actual NoC routes will again be compared,
+since fixed endpoints alone do not prove identical paths.
+
+Both earlier coordinators initially stopped before loading because the NoC
+packaging script incorrectly expected FIFO512 instead of its intended FIFO2048.
+That assertion was corrected without changing the hardware or performance
+limits. Original failures remain in `package-attempt-1` and `board-attempt-1`;
+export, packaging and source-hash checks were rerun before restarting. All board
+loads use volatile JTAG; no Flash programming was performed.
 
 The existing resource parser now recognizes Versal's `DSP Slices`, `RAMB36E5`
 and `RAMB18E5*` summary rows. Previously those names silently yielded zero.

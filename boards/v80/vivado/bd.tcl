@@ -48,6 +48,7 @@ for {set c 0} {$c < $otpu(nch)} {incr c} {
 # The existing PL NoC clock already runs from CIPS PL0 at 100 MHz.
 set_property CONFIG.ASSOCIATED_BUSIF [join $busifs :] [get_bd_pins axi_noc_cips/aclk4]
 source $otpu(root)/boards/v80/vivado/clocks.tcl
+source $otpu(root)/boards/v80/vivado/noc.tcl
 
 for {set c 0} {$c < $otpu(nch)} {incr c} {
   set si [format S%02d_AXI [expr {8 + $c}]]
