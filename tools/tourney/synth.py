@@ -108,8 +108,9 @@ def parse_vivado_util(text: str) -> dict:
         return 0.0
     return {"lut": row("LUT as Logic"), "lutram": row("LUT as Memory"),
             "ff": row("Slice Registers", "Register as Flip Flop"),
-            "dsp": row("DSPs"), "bram36": row("RAMB36/FIFO*", "RAMB36/FIFO"),
-            "bram18": row("RAMB18")}
+            "dsp": row("DSPs", "DSP Slices"),
+            "bram36": row("RAMB36/FIFO*", "RAMB36/FIFO", "RAMB36E5"),
+            "bram18": row("RAMB18", "RAMB18E5*")}
 
 
 COLLISION = re.compile(r"Synth 8-6430\]")

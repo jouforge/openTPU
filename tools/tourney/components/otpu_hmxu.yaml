@@ -1,0 +1,35 @@
+name: otpu_hmxu
+description: 'Shared HMM/HCVT/HDQ controller and ordered half dot products. W16A16 and W4A16
+  use the same FP16 multipliers and FP32 accumulators; HDQ expands signed INT4 with half scales.
+  Preserve packing, increasing-K accumulation, rounding, held requests and reset cancellation.
+  The slice owns arbitration with the integer MXU; changing this component must not change
+  the ISA or the shared arithmetic helpers.'
+allowed:
+- rtl/mxu/otpu_hdot.sv
+- rtl/mxu/otpu_hmxu.sv
+synth:
+  parts:
+  - top: otpu_hmxu
+    weight: 1
+    params:
+      N: 8
+      W4A16: 1
+    sources:
+    - rtl/vpu/otpu_fp.sv
+    - rtl/vpu/otpu_fpipe.sv
+    - rtl/top/otpu_pkg.sv
+    - rtl/mxu/otpu_hdot.sv
+    - rtl/mxu/otpu_hmxu.sv
+  note: Isolated half controller, with HDQ enabled; full-overlay timing is a separate gate.
+target_mhz: 100
+tests:
+  fast:
+  - tests/test_fp16.py
+  - tests/test_int4.py
+  - tests/test_fp16_isa.py
+  - tests/test_int4_isa.py
+  board:
+  - tests/test_fp16_isa.py
+  - tests/test_int4_isa.py
+  - tests/test_qwen35_mixed.py::test_model_native_rtl
+perf: false

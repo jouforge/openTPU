@@ -1,6 +1,6 @@
 """Regenerates tools/tourney/components/*.yaml (the component definitions). The YAML has since
 been edited by hand (test_perf.py and the DSTEP RTL test in the gates, notes on known timing
-paths; otpu_impl and otpu_full are hand-written): edit the YAML, and port those edits
+paths; otpu_hmxu, otpu_impl and otpu_full are hand-written): edit the YAML, and port those edits
 here before regenerating (docs/tourney.md, "Config drift")."""
 from pathlib import Path
 

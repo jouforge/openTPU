@@ -131,6 +131,20 @@ def test_parse_vivado_util():
         (1200, 16, 300, 9, 2, 0)
 
 
+def test_parse_vivado_util_versal():
+    # V80's Vivado 2026.1.1 resource summary uses different DSP/BRAM row names.
+    txt = ("| Register as Flip Flop | 45409 | 0 | 0 | 5148416 | 0.88 |\n"
+           "| LUT as Logic | 43068 | 0 | 0 | 2574208 | 1.67 |\n"
+           "| LUT as Memory | 13558 | 0 | 0 | 1287104 | 1.05 |\n"
+           "| RAMB36E5 | 548 | 0 | 0 | 3741 | 14.65 |\n"
+           "| RAMB18E5* | 5 | 0 | 0 | 7482 | 0.07 |\n"
+           "| DSP Slices | 1194 | 0 | 0 | 10848 | 11.01 |\n"
+           "| DSP58 | 1194 | Arithmetic |\n"
+           "| RAMB36E5_INT | 548 | BLOCKRAM |\n")
+    assert S.parse_vivado_util(txt) == dict(lut=43068, lutram=13558, ff=45409,
+                                           dsp=1194, bram36=548, bram18=5)
+
+
 # ------------------------------------------------------------------------------ sandbox
 def test_offlimits():
     allowed = ["rtl/top/otpu_coll.sv"]
@@ -178,7 +192,7 @@ def test_sandbox_rejects(tmp_path):
 # ------------------------------------------------------------------------------ components
 def test_component_configs_are_consistent():
     comps = sorted((ROOT / "tools" / "tourney" / "components").glob("*.yaml"))
-    assert len(comps) == 13
+    assert len(comps) == 14
     for p in comps:
         c = yaml.safe_load(p.read_text())
         assert c["name"] == p.stem
