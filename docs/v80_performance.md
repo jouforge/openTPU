@@ -483,6 +483,31 @@ fails. It must pass the same gates before
 any queue-depth default changes. Actual NoC routes will again be compared,
 since fixed endpoints alone do not prove identical paths.
 
+The implementation-stage NoC solution for `2c062965` contains 464 physical
+nets, all identical to qualified `4ebbec16`. This is a preliminary comparison;
+the final exported XSA is still checked independently before board loading.
+The local V80 native-MM and INT8/FP4 Qwen3.5 prefill/decode regression also
+passes all three cases using the established simulation environment. Evidence:
+`full-noc-fifo512/project-noc-comparison.json` on qfpga0 and
+`build/perf_v80/noc-promotion-native-result.json` locally.
+
+A conditional `exp/v80-noc-fifo1024` candidate at `3d267db9` changes only FIFO
+depth to 1024 relative to qualified `4ebbec16`. Its 102 configuration/build
+checks and native integer-MM check pass (103 cases total). Its mixed-model
+and reset/replay simulation is a separate gate; fresh source hashes and all
+successful test records must reach qfpga0 before its hardware build can start.
+
+The queued coordinator at `openTPU-perf-build/full-noc-fifo1024` starts that
+experiment only if the fixed-NoC FIFO512 candidate has exact numerical and
+memory results, identical final NoC nets, a failed W8 throughput gate, and a
+successful restoration of the qualified control. It skips FIFO1024 if FIFO512
+completes full qualification. Build, numerical, route-comparison or recovery
+failures stop this conditional workflow. Seven synthetic workflow checks cover
+these decisions; they are not board evidence. `condition.json`, `tests.exit`
+and `board-stage.txt` distinguish queued, skipped and actually executed work.
+Both depth experiments retain the original performance limits and 100/200 MHz
+clocks; neither changes the default configuration without physical qualification.
+
 Both earlier coordinators initially stopped before loading because the NoC
 packaging script incorrectly expected FIFO512 instead of its intended FIFO2048.
 That assertion was corrected without changing the hardware or performance
