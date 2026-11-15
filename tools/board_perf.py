@@ -4,7 +4,9 @@ co-simulation's calibration at the card's clocks).
 
     PYTHONPATH=. python3 tools/board_perf.py [bench ...] [--target T] --dev /dev/xdma0
                                     [--points P,...] [--json F]
-                                    (an XDMA card: its core clock from CORE_KHZ)
+                                    (the card's core clock from CORE_KHZ)
+    python3 tools/board_perf.py wstream latency portb --target v80:mixed \
+                                    --dev qdma:0000:41:00.1@4
     python3 tools/board_perf.py [bench ...] --target bcu1525-wg --sim --plus +cp=3333,+dimm_lat=N,...
                                     [--params ARD=64,RLY=0x22555599]   (tb_bcuwg: the bridges,
                                     the pairs and otpu_dimm_model's four DIMMs; --params its build's)
@@ -1165,7 +1167,7 @@ def main(argv=None) -> int:
     ap.add_argument("benches", nargs="*", help=f"of {', '.join(BENCHES)} (default all)")
     ap.add_argument("--target", default="bcu1525-wg")
     ap.add_argument("--points", default="", help="bench=P P ...;bench=... (default each bench's)")
-    ap.add_argument("--dev", help="the card (/dev/xdmaN; default OTPU_DEV, else /dev/xdma0)")
+    ap.add_argument("--dev", help="the card (/dev/xdmaN or qdma:BDF@queue; default OTPU_DEV)")
     ap.add_argument("--sim", action="store_true", help="the board model (tb_bcuwg)")
     ap.add_argument("--plus", default=",".join(SIM_PLUS), help="--sim: the simulator's plusargs")
     ap.add_argument("--params", default="",
@@ -1245,10 +1247,11 @@ def main(argv=None) -> int:
                 mhz = 1e6 / (2 * int(next((x for x in plus if x.startswith("+cp=")),
                                          "+cp=5000")[4:]))
             else:
-                from opentpu.host.board import XdmaTransport, default_dev
-                tr, mhz = XdmaTransport(a.dev or default_dev()), None
+                from opentpu.host.board import open_transport
+                tr, mhz = open_transport(a.dev, target=T.full_name(t)), None
             board = Board(tr)
             info = board.info()
+            out["build_id"] = info["build_id"]
             cfg = device_config(info, DRAM_BYTES=info["cfg"]["DRAM_BYTES"])
             if mhz is None:                                     # (--dev: the card's own)
                 mhz = info["core_khz"] / 1e3
